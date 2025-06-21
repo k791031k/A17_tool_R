@@ -1,17 +1,25 @@
 javascript: (async () => {
-    // === 基本常數定義 ===
+    /*
+     * =======================================================================
+     * 凱基人壽案件查詢工具 - 終極整合版
+     * * 所有 UI 元素皆在工具主視窗內部動態生成與管理。
+     * * 整合了自動環境判斷、固定環境視覺提示，以及優化後的 CSV 處理與 UI 邏輯。
+     * =======================================================================
+     */
+
+    /* --- 主要常數與設定 --- */
     const API_URLS = {
         test: 'https://euisv-uat.apps.tocp4.kgilife.com.tw/euisw/euisb/api/caseQuery/query',
         prod: 'https://euisv.apps.ocp4.kgilife.com.tw/euisw/euisb/api/caseQuery/query'
     };
-
     const TOKEN_STORAGE_KEY = 'euisToken';
     const A17_TEXT_SETTINGS_STORAGE_KEY = 'kgilifeQueryTool_A17TextSettings_vFinal';
-    const TOOL_MAIN_CONTAINER_ID = 'kgilifeQueryToolMainContainer_vFinal';
+    const TOOL_MAIN_CONTAINER_ID = 'kgilifeQueryToolMainContainer_vFinal'; // 主視窗的ID
+
     const Z_INDEX = {
-        OVERLAY: 2147483640,
-        MAIN_UI: 2147483630,
-        NOTIFICATION: 2147483647
+        OVERLAY: 2147483640, // 模態對話框（如Token, 查詢設定）
+        MAIN_UI: 2147483630, // 工具主視窗
+        NOTIFICATION: 2147483647 // 系統通知
     };
 
     const QUERYABLE_FIELD_DEFINITIONS = [{
@@ -57,11 +65,7 @@ javascript: (async () => {
         NO: '序號',
         _apiQueryStatus: '查詢結果'
     };
-
-    const ALL_DISPLAY_FIELDS_API_KEYS_MAIN = [
-        'applyNumber', 'policyNumber', 'approvalNumber', 'receiptNumber', 'insuredId',
-        'statusCombined', 'uwApproverUnit', 'uwApprover', 'approvalUser'
-    ];
+    const ALL_DISPLAY_FIELDS_API_KEYS_MAIN = ['applyNumber', 'policyNumber', 'approvalNumber', 'receiptNumber', 'insuredId', 'statusCombined', 'uwApproverUnit', 'uwApprover', 'approvalUser'];
 
     const UNIT_CODE_MAPPINGS = {
         H: '核保部',
@@ -73,13 +77,11 @@ javascript: (async () => {
         T: '桃竹',
         G: '保作'
     };
-
     const A17_UNIT_BUTTONS_DEFS = [{
             id: 'H',
             label: 'H-總公司',
             color: '#007bff'
-        },
-        {
+        }, {
             id: 'B',
             label: 'B-北一',
             color: '#28a745'
@@ -88,8 +90,7 @@ javascript: (async () => {
             id: 'P',
             label: 'P-北二',
             color: '#ffc107'
-        },
-        {
+        }, {
             id: 'T',
             label: 'T-桃竹',
             color: '#17a2b8'
@@ -98,8 +99,7 @@ javascript: (async () => {
             id: 'C',
             label: 'C-台中',
             color: '#fd7e14'
-        },
-        {
+        }, {
             id: 'N',
             label: 'N-台南',
             color: '#6f42c1'
@@ -108,18 +108,17 @@ javascript: (async () => {
             id: 'K',
             label: 'K-高雄',
             color: '#e83e8c'
-        },
-        {
+        }, {
             id: 'UNDEF',
             label: '查無單位',
             color: '#546e7a'
         }
     ];
-
     const UNIT_MAP_FIELD_API_KEY = 'uwApproverUnit';
+
     const A17_DEFAULT_TEXT_CONTENT = "DEAR,\n\n依據【管理報表：A17 新契約異常帳務】所載內容，報表中列示之送金單號碼，涉及多項帳務異常情形，例如：溢繳、短收、取消件需退費、以及無相對應之案件等問題。\n\n本週我們已逐筆查詢該等異常帳務，結果顯示，這些送金單應對應至下表所列之新契約案件。為利後續帳務處理，敬請協助確認各案件之實際帳務狀況，並如有需調整或處理事項，請一併協助辦理，謝謝。";
 
-    // === 全域變數 ===
+    /* --- 全域變數與狀態管理 --- */
     let CURRENT_API_URL = '';
     let apiAuthToken = null;
     let selectedQueryDefinitionGlobal = QUERYABLE_FIELD_DEFINITIONS[0];
@@ -132,8 +131,8 @@ javascript: (async () => {
         initialY: 0
     };
     let a17ButtonLongPressTimer = null;
+    let toolMainContainerEl = null; // 用於儲存主工具視窗的 DOM 引用
 
-    // === 狀態管理器 ===
     const StateManager = {
         originalQueryResults: [],
         baseA17MasterData: [],
@@ -169,65 +168,80 @@ javascript: (async () => {
             a17UnitButtonsContainer: null,
         },
         history: [],
-
         loadA17Settings() {
             const saved = localStorage.getItem(A17_TEXT_SETTINGS_STORAGE_KEY);
             if (saved) {
                 try {
                     const parsed = JSON.parse(saved);
                     for (const key in this.a17Mode.textSettings) {
-                        if (parsed.hasOwnProperty(key)) {
-                            this.a17Mode.textSettings[key] = parsed[key];
-                        }
+                        if (parsed.hasOwnProperty(key)) this.a17Mode.textSettings[key] = parsed[key];
                     }
                 } catch (e) {
                     console.error("載入A17文本設定失敗:", e);
                 }
             }
         },
-
-        saveA17Settings() {
+        // 使用 structuredClone 進行深度複製，更穩健
+        pushSnapshot(description) {
             try {
-                localStorage.setItem(A17_TEXT_SETTINGS_STORAGE_KEY, JSON.stringify(this.a17Mode.textSettings));
+                // 只複製需要復原的狀態部分
+                const snapshot = structuredClone({
+                    originalQueryResults: this.originalQueryResults,
+                    baseA17MasterData: this.baseA17MasterData,
+                    csvImport: this.csvImport, // 假設 csvImport 也需要復原
+                    a17Mode: { // 只複製必要的部分，避免循環引用或不必要的複雜性
+                        isActive: this.a17Mode.isActive,
+                        selectedUnits: new Set(this.a17Mode.selectedUnits),
+                        textSettings: structuredClone(this.a17Mode.textSettings)
+                    },
+                    // currentTable 相關的 DOM 元素不應該被快照化，因為它們會隨著 UI 重新渲染而改變
+                    // history 也不應被快照化以避免無限循環
+                    isEditMode: isEditMode // 外部的 isEditMode 也要納入考量
+                });
+                this.history.push({
+                    description,
+                    snapshot,
+                    timestamp: Date.now()
+                });
+                if (this.history.length > 20) this.history.shift(); // 增加歷史紀錄上限
             } catch (e) {
-                console.error("儲存A17文本設定失敗:", e);
+                console.error("創建快照失敗:", e);
+                displaySystemNotification("無法保存歷史狀態，復原功能可能受限。", true);
             }
         },
-
-        pushSnapshot(description = '操作') {
-            const snapshot = structuredClone({
-                originalQueryResults: this.originalQueryResults,
-                baseA17MasterData: this.baseA17MasterData,
-                csvImport: this.csvImport,
-                a17Mode: this.a17Mode
-            });
-            this.history.push({
-                description,
-                snapshot,
-                timestamp: Date.now()
-            });
-            if (this.history.length > 10) {
-                this.history.shift();
-            }
-        },
-
         undo() {
             if (this.history.length === 0) {
                 displaySystemNotification("沒有更多操作可復原", true);
                 return;
             }
-            const lastState = this.history.pop();
-            Object.assign(this, lastState.snapshot);
-            populateTableRows(this.a17Mode.isActive ? this.baseA17MasterData : this.originalQueryResults);
-            displaySystemNotification(`已復原：${lastState.description}`, false);
+            try {
+                const lastState = this.history.pop();
+                // 恢復狀態
+                this.originalQueryResults = lastState.snapshot.originalQueryResults;
+                this.baseA17MasterData = lastState.snapshot.baseA17MasterData;
+                this.csvImport = lastState.snapshot.csvImport;
+                this.a17Mode.isActive = lastState.snapshot.a17Mode.isActive;
+                this.a17Mode.selectedUnits = new Set(lastState.snapshot.a17Mode.selectedUnits);
+                this.a17Mode.textSettings = lastState.snapshot.a17Mode.textSettings;
+                isEditMode = lastState.snapshot.isEditMode; // 恢復外部的 isEditMode 變數
+
+                // 重新渲染UI以反映恢復的狀態
+                // 需要判斷當前是哪種模式來決定渲染哪個數據源
+                if (StateManager.currentTable.mainUIElement) { // 檢查主UI是否已存在
+                    renderResultsTableUI(this.a17Mode.isActive ? this.baseA17MasterData : this.originalQueryResults);
+                }
+                displaySystemNotification(`已復原：${lastState.description}`, false);
+            } catch (e) {
+                console.error("復原操作失敗:", e);
+                displaySystemNotification("復原操作執行失敗，狀態可能不一致。", true);
+            }
         }
     };
 
-    // === 工具函數 ===
+    /* --- 輔助函數 --- */
     function escapeHtml(unsafe) {
-        if (typeof unsafe !== 'string') {
-            return unsafe === null || unsafe === undefined ? '' : String(unsafe);
-        }
+        if (typeof unsafe !== 'string') return unsafe === null || unsafe === undefined ? '' : String(unsafe);
+        // 修正了`字符的替換，並使其更完整
         return unsafe.replace(/[&<>"'`]/g, m => ({
             '&': '&amp;',
             '<': '&lt;',
@@ -250,11 +264,13 @@ javascript: (async () => {
         i.innerHTML = isError ? '&#x26A0;' : '&#x2714;';
         n.appendChild(i);
         n.appendChild(document.createTextNode(message));
+        // 加入關閉按鈕
         const closeBtn = document.createElement('span');
         closeBtn.innerHTML = '&times;';
         closeBtn.style.cssText = 'margin-left:10px;font-size:18px;cursor:pointer;';
         closeBtn.onclick = () => n.remove();
         n.appendChild(closeBtn);
+
         document.body.appendChild(n);
         setTimeout(() => n.style.transform = 'translateX(0)', 50);
         setTimeout(() => {
@@ -263,61 +279,126 @@ javascript: (async () => {
         }, duration);
     }
 
+    // 修改 createDialogBase，使其對話框附加到工具主容器而不是 body
     function createDialogBase(idSuffix, contentHtml, minWidth = '350px', maxWidth = '600px', customStyles = '') {
+        // 確保主工具視窗已存在
+        if (!toolMainContainerEl) {
+            console.error("主工具視窗尚未初始化，無法創建對話框。");
+            return; // 或者選擇fallback到document.body，但這會打破UI一致性
+        }
+
         const id = TOOL_MAIN_CONTAINER_ID + idSuffix;
-        document.getElementById(id + '_overlay')?.remove();
+        toolMainContainerEl.querySelector(`#${id}_overlay`)?.remove(); // 在主容器內查找並移除舊的 overlay
+
         const overlay = document.createElement('div');
         overlay.id = id + '_overlay';
-        overlay.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:${Z_INDEX.OVERLAY};display:flex;align-items:center;justify-content:center;font-family:'Microsoft JhengHei',Arial,sans-serif;backdrop-filter:blur(2px);`;
+        // Overlay 樣式現在是相對於 toolMainContainerEl 進行定位
+        overlay.style.cssText = `position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:${Z_INDEX.OVERLAY};display:flex;align-items:center;justify-content:center;font-family:'Microsoft JhengHei',Arial,sans-serif;backdrop-filter:blur(2px);`;
         const dialog = document.createElement('div');
         dialog.id = id + '_dialog';
         dialog.style.cssText = `background:#fff;padding:20px 25px;border-radius:8px;box-shadow:0 5px 20px rgba(0,0,0,0.25);min-width:${minWidth};max-width:${maxWidth};width:auto;animation:qtDialogAppear 0.2s ease-out;${customStyles}`;
         dialog.innerHTML = contentHtml;
         overlay.appendChild(dialog);
-        document.body.appendChild(overlay);
+
+        // 將對話框附加到主工具視窗的內容區
+        toolMainContainerEl.appendChild(overlay);
 
         const styleEl = document.createElement('style');
+        // 修正了 styleEl.textContent 中的`字符錯誤，並將重複的按鈕樣式提取到這裡
         styleEl.textContent = `
-        @keyframes qtDialogAppear{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
-        .qt-dialog-btn{border:none;padding:8px 15px;border-radius:4px;font-size:13px;cursor:pointer;transition:opacity 0.2s ease,transform 0.1s ease;font-weight:500;margin-left:8px;}
-        .qt-dialog-btn:hover{opacity:0.85;}
-        .qt-dialog-btn:active{transform:scale(0.98);}
-        .qt-dialog-btn-blue{background:#007bff;color:white;}
-        .qt-dialog-btn-grey{background:#6c757d;color:white;}
-        .qt-dialog-btn-red{background:#dc3545;color:white;}
-        .qt-dialog-btn-orange{background:#fd7e14;color:white;}
-        .qt-dialog-btn-green{background:#28a745;color:white;}
-        .qt-dialog-title{margin:0 0 15px 0;color:#333;font-size:18px;text-align:center;font-weight:600;}
-        .qt-input,.qt-textarea,.qt-select{width:calc(100% - 18px);padding:9px;border:1px solid #ccc;border-radius:4px;font-size:13px;margin-bottom:15px;color:#333;box-sizing:border-box;}
-        .qt-textarea{min-height:70px;resize:vertical;}
-        .qt-dialog-flex-end{display:flex;justify-content:flex-end;margin-top:15px;}
-        .qt-dialog-flex-between{display:flex;justify-content:space-between;align-items:center;margin-top:15px;}
-        .qt-retry-btn{background:#17a2b8;color:white;border:none;padding:4px 8px;border-radius:3px;font-size:11px;cursor:pointer;margin:2px;}
-        .qt-retry-edit-btn{background:#fd7e14;color:white;border:none;padding:4px 8px;border-radius:3px;font-size:11px;cursor:pointer;margin:2px;}
-        .qt-retry-btn:hover,.qt-retry-edit-btn:hover{opacity:0.8;}
-        .qt-querytype-btn{border:2px solid transparent;padding:8px 10px;border-radius:4px;font-size:13px;font-weight:500;cursor:pointer;margin:4px;transition:all 0.2s ease;}
-        .qt-querytype-btn:hover{opacity:0.9;}
-        .qt-unit-filter-btn{border:none;padding:6px 12px;border-radius:4px;font-size:12px;cursor:pointer;margin:3px;transition:all 0.2s ease;font-weight:500;}
-        .qt-unit-filter-btn:hover{opacity:0.8;}
-        .qt-unit-filter-btn.active{box-shadow:0 0 8px rgba(0,0,0,0.3);}
-        .qt-table{width:100%;border-collapse:collapse;margin-top:10px;}
-        .qt-table th,.qt-table td{border:1px solid #ddd;padding:8px;text-align:left;font-size:13px;}
-        .qt-table th{background-color:#f8f9fa;font-weight:600;cursor:pointer;user-select:none;}
-        .qt-table th:hover{background-color:#e9ecef;}
-        .qt-table tbody tr:nth-child(even){background-color:#f8f9fa;}
-        .qt-table tbody tr:hover{background-color:#e3f2fd;}
-        .qt-editable-cell{cursor:pointer;border:1px dashed transparent;}
-        .qt-editable-cell:hover{border-color:#007bff;background-color:#e3f2fd;}
-        .qt-delete-btn{background:#dc3545;color:white;border:none;padding:4px 6px;border-radius:3px;font-size:10px;cursor:pointer;}
-        .qt-delete-btn:hover{opacity:0.8;}
-        `;
+      @keyframes qtDialogAppear{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
+      .qt-dialog-btn{border:none;padding:8px 15px;border-radius:4px;font-size:13px;cursor:pointer;transition:opacity 0.2s ease,transform 0.1s ease;font-weight:500;margin-left:8px;}
+      .qt-dialog-btn:hover{opacity:0.85;}
+      .qt-dialog-btn:active{transform:scale(0.98);}
+      .qt-dialog-btn-blue{background:#007bff;color:white;}
+      .qt-dialog-btn-grey{background:#6c757d;color:white;}
+      .qt-dialog-btn-red{background:#dc3545;color:white;}
+      .qt-dialog-btn-orange{background:#fd7e14;color:white;}
+      .qt-dialog-btn-green{background:#28a745;color:white;}
+      .qt-dialog-btn-purple{background:#6f42c1;color:white;} /* A17按鈕的顏色 */
+      .qt-dialog-title{margin:0 0 15px 0;color:#333;font-size:18px;text-align:center;font-weight:600;}
+
+      /* 關鍵修改：強制設定輸入欄位的顏色 */
+      .qt-input,.qt-textarea,.qt-select{
+        width:calc(100% - 18px);
+        padding:9px;
+        border:1px solid #ccc;
+        border-radius:4px;
+        font-size:13px;
+        margin-bottom:15px;
+        box-sizing:border-box;
+        background-color:#ffffff !important;
+        color:#333333 !important;
+        -webkit-appearance:none;
+        appearance:none;
+      }
+
+      /* 針對深色模式的特殊處理 */
+      .qt-input:focus,.qt-textarea:focus,.qt-select:focus{
+        background-color:#ffffff !important;
+        color:#333333 !important;
+        border-color:#007bff;
+        outline:none;
+      }
+
+      /* 確保placeholder文字可見 */
+      .qt-input::placeholder,.qt-textarea::placeholder{
+        color:#666666 !important;
+        opacity:1;
+      }
+
+      /* 針對color input的特殊處理 */
+      input[type="color"].qt-input{
+        height:40px;
+        padding:2px;
+        background-color:#ffffff !important;
+      }
+
+      /* 針對number input的特殊處理 */
+      input[type="number"].qt-input{
+        background-color:#ffffff !important;
+        color:#333333 !important;
+      }
+
+      .qt-textarea{min-height:70px;resize:vertical;}
+      .qt-dialog-flex-end{display:flex;justify-content:flex-end;margin-top:15px;}
+      .qt-dialog-flex-between{display:flex;justify-content:space-between;align-items:center;margin-top:15px;}
+      .qt-retry-btn, .qt-retry-edit-btn { background:#17a2b8; color:white; border:none; padding:4px 8px; border-radius:3px; font-size:11px; cursor:pointer; margin:2px; }
+      .qt-retry-edit-btn { background:#fd7e14; }
+      .qt-retry-btn:hover, .qt-retry-edit-btn:hover { opacity:0.8; }
+      .qt-querytype-btn{border:2px solid transparent;padding:8px 10px;border-radius:4px;font-size:13px;font-weight:500;cursor:pointer;margin:4px;transition:all 0.2s ease;}
+      .qt-querytype-btn:hover{opacity:0.9;}
+      .qt-unit-filter-btn{border:none;padding:6px 12px;border-radius:4px;font-size:12px;cursor:pointer;margin:3px;transition:all 0.2s ease;font-weight:500;}
+      .qt-unit-filter-btn:hover{opacity:0.8;}
+      .qt-unit-filter-btn.active{box-shadow:0 0 8px rgba(0,0,0,0.3);}
+      .qt-table{width:100%;border-collapse:collapse;margin-top:10px;}
+      .qt-table th,.qt-table td{border:1px solid #ddd;padding:8px;text-align:left;font-size:13px;}
+      .qt-table th{background-color:#f8f9fa;font-weight:600;cursor:pointer;user-select:none;}
+      .qt-table th:hover{background-color:#e9ecef;}
+      .qt-table tbody tr:nth-child(even){background-color:#f8f9fa;}
+      .qt-table tbody tr:hover{background-color:#e3f2fd;}
+      .qt-editable-cell{cursor:pointer;border:1px dashed transparent;}
+      .qt-editable-cell:hover{border-color:#007bff;background-color:#e3f2fd;}
+      .qt-delete-btn{background:#dc3545;color:white;border:none;padding:4px 6px;border-radius:3px;font-size:10px;cursor:pointer;}
+      .qt-delete-btn:hover{opacity:0.8;}
+
+      /* 強制設定對話框背景色 */
+      .qt-dialog-title{color:#333333 !important;}
+
+      /* 針對預覽區的特殊處理 */
+      #qt-a17-preview{
+        background-color:#f9f9f9 !important;
+        color:#333333 !important;
+        border:1px solid #ddd !important;
+      }
+    `;
         dialog.appendChild(styleEl);
 
-        // ESC鍵關閉
+        // ESC鍵關閉監聽器獨立於此函數之外
         const escListener = (e) => {
             if (e.key === 'Escape') {
                 overlay.remove();
-                document.removeEventListener('keydown', escListener);
+                document.removeEventListener('keydown', escListener); // 移除監聽器以避免衝突
             }
         };
         document.addEventListener('keydown', escListener);
@@ -335,7 +416,7 @@ javascript: (async () => {
     }
 
     function getFirstLetter(unitString) {
-        if (!unitString || typeof unitString !== 'string') return 'UNDEF';
+        if (!unitString || typeof unitString !== 'string') return 'UNDEF'; // 修正為 UNDEF 統一
         for (let i = 0; i < unitString.length; i++) {
             const char = unitString.charAt(i).toUpperCase();
             if (/[A-Z]/.test(char)) return char;
@@ -350,33 +431,77 @@ javascript: (async () => {
         return `${y}${m}${d}`;
     }
 
-    // === 管理器 ===
+    /* --- 環境管理器 (整合了自動判斷與手動切換，並增加了視覺提示) --- */
     const EnvManager = {
         get: () => CURRENT_API_URL,
-        showDialog: () => new Promise(resolve => {
-            const contentHtml = `
-            <h3 class="qt-dialog-title">選擇查詢環境</h3>
-            <div style="display:flex; gap:10px; justify-content:center;">
-                <button id="qt-env-uat" class="qt-dialog-btn qt-dialog-btn-green" style="flex-grow:1;">測試 (UAT)</button>
-                <button id="qt-env-prod" class="qt-dialog-btn qt-dialog-btn-orange" style="flex-grow:1;">正式 (PROD)</button>
-            </div>
-            <div style="text-align:center; margin-top:15px;">
-                <button id="qt-env-cancel" class="qt-dialog-btn qt-dialog-btn-grey">取消</button>
-            </div>
+
+        // 設定環境並更新顯示
+        set: (env) => {
+            if (env === 'test') {
+                CURRENT_API_URL = API_URLS.test;
+                EnvManager.updateDisplay('UAT', '#28a745'); // 綠色
+            } else if (env === 'prod') {
+                CURRENT_API_URL = API_URLS.prod;
+                EnvManager.updateDisplay('PROD', '#dc3545'); // 紅色
+            }
+        },
+
+        // 自動判斷環境並設定
+        autoDetectAndSet: () => {
+            const hostname = window.location.hostname;
+            if (hostname.includes('uat') || hostname.includes('test')) {
+                EnvManager.set('test'); // 自動設定為 UAT
+            } else {
+                EnvManager.set('prod'); // 自動設定為 Production
+            }
+        },
+
+        // 顯示環境選擇對話框 (用於手動切換)
+        showDialog: async () => {
+            return new Promise(resolve => {
+                const contentHtml = `<h3 class="qt-dialog-title">選擇查詢環境</h3><div style="display:flex; gap:10px; justify-content:center;"><button id="qt-env-uat" class="qt-dialog-btn qt-dialog-btn-green" style="flex-grow:1;">測試 (UAT)</button><button id="qt-env-prod" class="qt-dialog-btn qt-dialog-btn-orange" style="flex-grow:1;">正式 (PROD)</button></div><div style="text-align:center; margin-top:15px;"><button id="qt-env-cancel" class="qt-dialog-btn qt-dialog-btn-grey">取消</button></div>`;
+                const {
+                    overlay
+                } = createDialogBase('_EnvSelect', contentHtml, '300px', 'auto');
+
+                // 獨立的 ESC 監聽器，避免與 createDialogBase 的衝突
+                const dialogEscListener = (e) => {
+                    if (e.key === 'Escape') {
+                        overlay.remove();
+                        document.removeEventListener('keydown', dialogEscListener);
+                        resolve(null); // 取消操作
+                    }
+                };
+                document.addEventListener('keydown', dialogEscListener);
+
+                const closeDialog = (value) => {
+                    overlay.remove();
+                    document.removeEventListener('keydown', dialogEscListener); // 確保移除監聽器
+                    resolve(value);
+                };
+                overlay.querySelector('#qt-env-uat').onclick = () => closeDialog('test');
+                overlay.querySelector('#qt-env-prod').onclick = () => closeDialog('prod');
+                overlay.querySelector('#qt-env-cancel').onclick = () => closeDialog(null);
+            });
+        },
+
+        // 更新主工具視窗內環境顯示
+        updateDisplay: (envName, color) => {
+            // 確保主工具視窗和其內的 envDisplay 元素已存在
+            if (!toolMainContainerEl) return;
+            let envDisplay = toolMainContainerEl.querySelector('#qt-env-display-fixed');
+            if (!envDisplay) {
+                envDisplay = document.createElement('div');
+                envDisplay.id = 'qt-env-display-fixed';
+                envDisplay.style.cssText = `
+                position:absolute; top:10px; right:10px; padding:5px 10px; 
+                border-radius:5px; font-weight:bold; color:white; z-index:${Z_INDEX.MAIN_UI + 1};
+                font-size:12px; pointer-events:none; /* 不阻擋點擊 */
             `;
-            const {
-                overlay
-            } = createDialogBase('_EnvSelect', contentHtml, '300px', 'auto');
-            const closeDialog = (value) => {
-                overlay.remove();
-                resolve(value);
-            };
-            overlay.querySelector('#qt-env-uat').onclick = () => closeDialog('test');
-            overlay.querySelector('#qt-env-prod').onclick = () => closeDialog('prod');
-            overlay.querySelector('#qt-env-cancel').onclick = () => closeDialog(null);
-        }),
-        set(env) {
-            CURRENT_API_URL = API_URLS[env];
+                toolMainContainerEl.appendChild(envDisplay);
+            }
+            envDisplay.textContent = `${envName} 環境`;
+            envDisplay.style.backgroundColor = color;
         }
     };
 
@@ -395,24 +520,12 @@ javascript: (async () => {
             return !!apiAuthToken;
         },
         showDialog: (attempt = 1) => new Promise(resolve => {
-            const contentHtml = `
-            <h3 class="qt-dialog-title">API TOKEN 設定</h3>
-            <input type="password" id="qt-token-input" class="qt-input" placeholder="請輸入您的 API TOKEN">
-            ${attempt > 1 ? `<p style="color:red; font-size:12px; text-align:center; margin-bottom:10px;">Token驗證失敗，請重新輸入。</p>` : ''}
-            <div class="qt-dialog-flex-between">
-                <button id="qt-token-skip" class="qt-dialog-btn qt-dialog-btn-orange">略過</button>
-                <div>
-                    <button id="qt-token-close-tool" class="qt-dialog-btn qt-dialog-btn-red">關閉工具</button>
-                    <button id="qt-token-ok" class="qt-dialog-btn qt-dialog-btn-blue">${attempt > 1 ? '重試' : '確定'}</button>
-                </div>
-            </div>
-            `;
+            const contentHtml = `<h3 class="qt-dialog-title">API TOKEN 設定</h3><input type="password" id="qt-token-input" class="qt-input" placeholder="請輸入您的 API TOKEN">${attempt > 1 ? `<p style="color:red; font-size:12px; text-align:center; margin-bottom:10px;">Token驗證失敗，請重新輸入。</p>` : ''}<div class="qt-dialog-flex-between"><button id="qt-token-skip" class="qt-dialog-btn qt-dialog-btn-orange">略過</button><div><button id="qt-token-close-tool" class="qt-dialog-btn qt-dialog-btn-red">關閉工具</button><button id="qt-token-ok" class="qt-dialog-btn qt-dialog-btn-blue">${attempt > 1 ? '重試' : '確定'}</button></div></div>`;
             const {
                 overlay
             } = createDialogBase('_Token', contentHtml, '320px', 'auto');
             const inputEl = overlay.querySelector('#qt-token-input');
             inputEl.focus();
-
             if (attempt > 2) {
                 const okBtn = overlay.querySelector('#qt-token-ok');
                 okBtn.disabled = true;
@@ -421,628 +534,730 @@ javascript: (async () => {
                 displaySystemNotification('Token多次驗證失敗', true, 4000);
             }
 
+            // 獨立的 ESC 監聽器
+            const dialogEscListener = (e) => {
+                if (e.key === 'Escape') {
+                    overlay.remove();
+                    document.removeEventListener('keydown', dialogEscListener);
+                    resolve('_token_dialog_cancel_'); // 取消操作
+                }
+            };
+            document.addEventListener('keydown', dialogEscListener);
+
             const closeDialog = (value) => {
                 overlay.remove();
+                document.removeEventListener('keydown', dialogEscListener); // 確保移除監聽器
                 resolve(value);
             };
-
             overlay.querySelector('#qt-token-ok').onclick = () => closeDialog(inputEl.value.trim());
             overlay.querySelector('#qt-token-close-tool').onclick = () => closeDialog('_close_tool_');
             overlay.querySelector('#qt-token-skip').onclick = () => closeDialog('_skip_token_');
         })
     };
 
-    const CSVManager = {
-        async importCSV(file, purpose) {
-            return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = e => {
-                    try {
-                        const text = e.target.result;
-                        const lines = text.split('\n').filter(line => line.trim());
-                        if (lines.length < 2) {
-                            reject(new Error('CSV檔案格式不正確'));
-                            return;
-                        }
-
-                        const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
-                        const data = lines.slice(1).map(line => {
-                            const cells = line.split(',').map(c => c.trim().replace(/"/g, ''));
-                            const row = {};
-                            headers.forEach((header, index) => {
-                                row[header] = cells[index] || '';
-                            });
-                            return row;
-                        });
-
-                        StateManager.csvImport.fileName = file.name;
-                        StateManager.csvImport.rawHeaders = headers;
-                        StateManager.csvImport.rawData = data;
-
-                        resolve({
-                            headers,
-                            data,
-                            purpose
-                        });
-                    } catch (error) {
-                        reject(error);
-                    }
-                };
-                reader.onerror = () => reject(new Error('檔案讀取失敗'));
-                reader.readAsText(file, 'UTF-8');
-            });
-        },
-
-        async showColumnSelectDialog(headers, purpose, isMultiple = false) {
-            return new Promise(resolve => {
-                const title = purpose === 'query' ? '選擇查詢值欄位' : '選擇A17合併欄位';
-                const inputType = isMultiple ? 'checkbox' : 'radio';
-                const columnsHtml = headers.map((header, index) =>
-                    `<label style="display:block;margin:8px 0;cursor:pointer;">
-                        <input type="${inputType}" name="csvCol" value="${index}" style="margin-right:8px;">
-                        ${escapeHtml(header)}
-                    </label>`
-                ).join('');
-
-                const contentHtml = `
-                <h3 class="qt-dialog-title">${title}</h3>
-                <div style="max-height:300px;overflow-y:auto;border:1px solid #ddd;padding:10px;border-radius:4px;">
-                    ${columnsHtml}
-                </div>
-                <div class="qt-dialog-flex-end">
-                    <button id="qt-csv-col-cancel" class="qt-dialog-btn qt-dialog-btn-grey">取消</button>
-                    <button id="qt-csv-col-ok" class="qt-dialog-btn qt-dialog-btn-blue">確定</button>
-                </div>
-                `;
-
-                const {
-                    overlay
-                } = createDialogBase('_CSVColSelect', contentHtml, '400px', 'auto');
-
-                const closeDialog = (value) => {
-                    overlay.remove();
-                    resolve(value);
-                };
-
-                overlay.querySelector('#qt-csv-col-ok').onclick = () => {
-                    const selected = Array.from(overlay.querySelectorAll('input[name="csvCol"]:checked'))
-                        .map(input => parseInt(input.value));
-                    if (selected.length === 0) {
-                        displaySystemNotification('請選擇至少一個欄位', true);
-                        return;
-                    }
-                    closeDialog(selected);
-                };
-
-                overlay.querySelector('#qt-csv-col-cancel').onclick = () => closeDialog(null);
-            });
-        }
-    };
-
-    // === API查詢函數 ===
-    async function performApiQuery(queryValue, queryApiKey) {
-        try {
-            const requestBody = {
-                currentPage: 1,
-                pageSize: 10,
-                [queryApiKey]: queryValue
-            };
-
-            const headers = {
-                'Content-Type': 'application/json'
-            };
-
-            if (apiAuthToken) {
-                headers['SSO-TOKEN'] = apiAuthToken;
-            }
-
-            let retries = 1;
-            while (retries >= 0) {
-                try {
-                    const response = await fetch(CURRENT_API_URL, {
-                        method: 'POST',
-                        headers: headers,
-                        body: JSON.stringify(requestBody)
-                    });
-
-                    if (response.status === 401) {
-                        apiAuthToken = null;
-                        TokenManager.clear();
-                        return {
-                            error: 'token_invalid',
-                            data: null
-                        };
-                    }
-
-                    if (!response.ok) {
-                        throw new Error(`HTTP ${response.status}`);
-                    }
-
-                    const data = await response.json();
-
-                    if (data && data.records && data.records.length > 0) {
-                        return {
-                            success: true,
-                            data
-                        };
-                    } else {
-                        return {
-                            success: false,
-                            data: null
-                        };
-                    }
-                } catch (error) {
-                    if (retries > 0) {
-                        await new Promise(r => setTimeout(r, 2000));
-                        retries--;
-                    } else {
-                        throw error;
-                    }
-                }
-            }
-        } catch (error) {
-            console.error('API查詢錯誤:', error);
-            return {
-                error: 'network_error',
-                data: null
-            };
-        }
-    }
-
-    // === 查詢設定對話框 ===
+    /* --- 對話框建立函數 (CSV 相關功能模組化) --- */
     function createQuerySetupDialog() {
         return new Promise(resolve => {
-            const queryButtonsHtml = QUERYABLE_FIELD_DEFINITIONS.map(def =>
-                `<button class="qt-querytype-btn" data-apikey="${def.queryApiKey}" style="background-color:${def.color};color:white;">${escapeHtml(def.queryDisplayName)}</button>`
-            ).join('');
-
-            const contentHtml = `
-            <h3 class="qt-dialog-title">查詢條件設定</h3>
-            <div style="margin-bottom:10px;font-size:13px;color:#555;">選擇查詢欄位類型：</div>
-            <div id="qt-querytype-buttons" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:15px;">
-                ${queryButtonsHtml}
-            </div>
-            <div style="margin-bottom:5px;font-size:13px;color:#555;">輸入查詢值（多個值請用空格、逗號或換行分隔）：</div>
-            <textarea id="qt-queryvalue-input" class="qt-textarea" placeholder="請輸入查詢值..."></textarea>
-            <div style="margin-bottom:15px;">
-                <input type="file" id="qt-csv-file-input" accept=".csv,.txt" style="display:none;">
-                <button id="qt-csv-import-btn" class="qt-dialog-btn qt-dialog-btn-grey">從CSV/TXT匯入...</button>
-                <span id="qt-csv-filename" style="margin-left:10px;font-size:12px;color:#666;"></span>
-            </div>
-            <div style="display:flex;justify-content:space-between;margin-top:15px;">
-                <button id="qt-clear-input" class="qt-dialog-btn qt-dialog-btn-orange">清除所有輸入</button>
-                <div>
-                    <button id="qt-query-cancel" class="qt-dialog-btn qt-dialog-btn-grey">取消</button>
-                    <button id="qt-query-ok" class="qt-dialog-btn qt-dialog-btn-blue">開始查詢</button>
-                </div>
-            </div>
-            `;
+            const queryButtonsHtml = QUERYABLE_FIELD_DEFINITIONS.map(def => `<button class="qt-querytype-btn" data-apikey="${def.queryApiKey}" style="background-color:${def.color}; color:white;">${escapeHtml(def.queryDisplayName)}</button>`).join('');
+            const contentHtml = `<h3 class="qt-dialog-title">查詢條件設定</h3><div style="margin-bottom:10px; font-size:13px; color:#555;">選擇查詢欄位類型：</div><div id="qt-querytype-buttons" style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:15px;">${queryButtonsHtml}</div><div style="margin-bottom:5px; font-size:13px; color:#555;">輸入查詢值 (可多筆，以換行/空格/逗號/分號分隔)：</div><textarea id="qt-queryvalues-input" class="qt-textarea" placeholder="請先選擇上方查詢欄位類型"></textarea><div style="margin-bottom:15px;"><button id="qt-csv-import-btn" class="qt-dialog-btn qt-dialog-btn-grey" style="margin-left:0;">從CSV/TXT匯入...</button><span id="qt-csv-filename-display" style="font-size:12px; color:#666; margin-left:10px;"></span></div><div class="qt-dialog-flex-between"><button id="qt-clear-all-input-btn" class="qt-dialog-btn qt-dialog-btn-orange">清除所有輸入</button><div><button id="qt-querysetup-cancel" class="qt-dialog-btn qt-dialog-btn-grey">取消</button><button id="qt-querysetup-ok" class="qt-dialog-btn qt-dialog-btn-blue">開始查詢</button></div><button id="qt-env-switch-btn" class="qt-dialog-btn qt-dialog-btn-blue">環境</button></div><input type="file" id="qt-file-input-hidden" accept=".csv,.txt" style="display:none;">`; // 新增「環境」按鈕
 
             const {
                 overlay
-            } = createDialogBase('_QuerySetup', contentHtml, '450px', 'auto');
-
-            let selectedApiKey = QUERYABLE_FIELD_DEFINITIONS[0].queryApiKey;
-            const queryTypeButtons = overlay.querySelectorAll('.qt-querytype-btn');
-            const queryValueInput = overlay.querySelector('#qt-queryvalue-input');
-            const csvFileInput = overlay.querySelector('#qt-csv-file-input');
+            } = createDialogBase('_QuerySetup', contentHtml, '480px', 'auto');
+            const queryValuesInput = overlay.querySelector('#qt-queryvalues-input');
+            const typeButtons = overlay.querySelectorAll('.qt-querytype-btn');
             const csvImportBtn = overlay.querySelector('#qt-csv-import-btn');
-            const csvFilename = overlay.querySelector('#qt-csv-filename');
+            const fileInputHidden = overlay.querySelector('#qt-file-input-hidden');
+            const csvFilenameDisplay = overlay.querySelector('#qt-csv-filename-display');
+            const envSwitchBtn = overlay.querySelector('#qt-env-switch-btn'); // 取得「環境」按鈕
 
-            function setActiveButton(apiKey) {
-                queryTypeButtons.forEach(btn => {
-                    const isSelected = btn.dataset.apikey === apiKey;
-                    btn.style.border = isSelected ? `2px solid ${btn.style.backgroundColor}` : '2px solid transparent';
-                    btn.style.boxShadow = isSelected ? `0 0 6px ${btn.style.backgroundColor}80` : 'none';
-                });
-
-                // 更新placeholder
-                const selectedDef = QUERYABLE_FIELD_DEFINITIONS.find(def => def.queryApiKey === apiKey);
-                if (selectedDef) {
-                    queryValueInput.placeholder = `請輸入${selectedDef.queryDisplayName}...`;
-                }
+            // 綁定「環境」按鈕事件
+            if (envSwitchBtn) {
+                envSwitchBtn.onclick = async () => {
+                    const selectedEnv = await EnvManager.showDialog(); // 彈出選擇對話框
+                    if (selectedEnv) {
+                        EnvManager.set(selectedEnv); // 手動設定環境
+                        displaySystemNotification(`環境已手動切換為: ${selectedEnv === 'prod' ? '正式' : '測試'}`, false);
+                    } else {
+                        displaySystemNotification('環境切換已取消', true);
+                    }
+                };
             }
 
-            queryTypeButtons.forEach(btn => {
-                btn.onclick = () => {
-                    selectedApiKey = btn.dataset.apikey;
-                    setActiveButton(selectedApiKey);
-                };
+            function setActiveButton(apiKey) {
+                typeButtons.forEach(btn => {
+                    const isSelected = btn.dataset.apikey === apiKey;
+                    btn.style.border = isSelected ? `2px solid ${btn.style.backgroundColor}` : '2px solid transparent';
+                    btn.style.boxShadow = isSelected ? `0 0 8px ${btn.style.backgroundColor}70` : 'none';
+                    if (isSelected) {
+                        selectedQueryDefinitionGlobal = QUERYABLE_FIELD_DEFINITIONS.find(d => d.queryApiKey === apiKey);
+                        queryValuesInput.placeholder = `請輸入${selectedQueryDefinitionGlobal.queryDisplayName}(可多筆...)`;
+                    }
+                });
+            }
+
+            typeButtons.forEach(btn => btn.onclick = () => {
+                setActiveButton(btn.dataset.apikey);
+                queryValuesInput.focus();
             });
-
-            setActiveButton(selectedApiKey);
-
-            // CSV匯入處理
-            csvImportBtn.onclick = () => csvFileInput.click();
-            csvFileInput.onchange = async (e) => {
+            setActiveButton(selectedQueryDefinitionGlobal.queryApiKey);
+            csvImportBtn.onclick = () => fileInputHidden.click();
+            fileInputHidden.onchange = async (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
-
+                csvFilenameDisplay.textContent = `已選: ${file.name}`;
                 try {
-                    // 詢問用途
-                    const purpose = await showCSVPurposeDialog();
-                    if (!purpose) return;
-
-                    const result = await CSVManager.importCSV(file, purpose);
-                    csvFilename.textContent = file.name;
-
-                    if (purpose === 'query') {
-                        // 選擇查詢值欄位
-                        const selectedCols = await CSVManager.showColumnSelectDialog(result.headers, 'query', false);
-                        if (selectedCols && selectedCols.length > 0) {
-                            const colIndex = selectedCols[0];
-                            const queryValues = result.data.map(row => row[result.headers[colIndex]]).filter(Boolean);
-                            queryValueInput.value = queryValues.join('\n');
-                            StateManager.csvImport.selectedColForQueryName = result.headers[colIndex];
-                        }
-                    } else if (purpose === 'a17merge') {
-                        // 選擇A17合併欄位
-                        const selectedCols = await CSVManager.showColumnSelectDialog(result.headers, 'a17merge', true);
-                        if (selectedCols && selectedCols.length > 0) {
-                            StateManager.csvImport.selectedColsForA17Merge = selectedCols.map(i => result.headers[i]);
-                            StateManager.csvImport.isA17CsvPrepared = true;
-                            displaySystemNotification(`已選擇${selectedCols.length}個欄位供A17合併`, false);
-                        }
+                    const text = await file.text();
+                    const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
+                    if (lines.length === 0) {
+                        displaySystemNotification('CSV檔案為空', true);
+                        return;
                     }
-                } catch (error) {
-                    displaySystemNotification(`CSV匯入失敗：${error.message}`, true);
+                    const headers = lines[0].split(/,|;|\t/).map(h => h.trim().replace(/^"|"$/g, ''));
+                    const purpose = await createCSVPurposeDialog();
+                    if (!purpose) {
+                        csvFilenameDisplay.textContent = '';
+                        fileInputHidden.value = '';
+                        return;
+                    }
+                    if (purpose === 'fillQueryValues') {
+                        const columnIndex = await createCSVColumnSelectionDialog(headers, "選擇包含查詢值的欄位：");
+                        if (columnIndex === null || columnIndex === columnIndex) {
+                            csvFilenameDisplay.textContent = '';
+                            fileInputHidden.value = '';
+                            return;
+                        } //修正了這裡的邏輯
+                        const values = [];
+                        for (let i = 1; i < lines.length; i++) {
+                            const cols = lines[i].split(/,|;|\t/).map(c => c.trim().replace(/^"|"$/g, ''));
+                            if (cols[columnIndex] && cols[columnIndex].trim() !== "") values.push(cols[columnIndex].trim());
+                        }
+                        queryValuesInput.value = Array.from(new Set(values)).join('\n');
+                        displaySystemNotification('查詢值已從CSV填入', false);
+                        StateManager.csvImport = {
+                            ...StateManager.csvImport,
+                            fileName: file.name,
+                            rawHeaders: headers,
+                            rawData: lines.slice(1).map(line => line.split(/,|;|\t/).map(c => c.trim().replace(/^"|"$/g, ''))),
+                            selectedColForQueryName: headers[columnIndex],
+                            isA17CsvPrepared: false,
+                            selectedColsForA17Merge: []
+                        };
+                    } else if (purpose === 'prepareA17Merge') {
+                        const selectedHeadersForA17 = await createCSVColumnCheckboxDialog(headers, "勾選要在A17表格中顯示的CSV欄位：");
+                        if (!selectedHeadersForA17 || selectedHeadersForA17.length === 0) {
+                            csvFilenameDisplay.textContent = '';
+                            fileInputHidden.value = '';
+                            return;
+                        }
+                        StateManager.csvImport = {
+                            ...StateManager.csvImport,
+                            fileName: file.name,
+                            rawHeaders: headers,
+                            rawData: lines.slice(1).map(line => line.split(/,|;|\t/).map(c => c.trim().replace(/^"|"$/g, ''))),
+                            selectedColsForA17Merge: selectedHeadersForA17,
+                            isA17CsvPrepared: true,
+                            selectedColForQueryName: null
+                        };
+                        displaySystemNotification(`已選 ${selectedHeadersForA17.length} 個CSV欄位供A17合併`, false);
+                    }
+                } catch (err) {
+                    console.error("處理CSV錯誤:", err);
+                    displaySystemNotification('讀取CSV失敗', true);
+                    csvFilenameDisplay.textContent = '';
                 }
+                fileInputHidden.value = '';
             };
 
-            // 清除輸入
-            overlay.querySelector('#qt-clear-input').onclick = () => {
-                queryValueInput.value = '';
-                csvFilename.textContent = '';
-                csvFileInput.value = '';
+            overlay.querySelector('#qt-clear-all-input-btn').onclick = () => {
+                queryValuesInput.value = '';
+                csvFilenameDisplay.textContent = '';
                 StateManager.csvImport = {
                     fileName: '',
                     rawHeaders: [],
                     rawData: [],
                     selectedColForQueryName: null,
                     selectedColsForA17Merge: [],
-                    isA17CsvPrepared: false,
+                    isA17CsvPrepared: false
                 };
+                fileInputHidden.value = '';
+                displaySystemNotification('所有輸入已清除', false);
             };
 
-            overlay.querySelector('#qt-query-ok').onclick = () => {
-                const queryValues = queryValueInput.value.trim();
-                if (!queryValues) {
-                    displaySystemNotification('請輸入查詢值', true);
-                    return;
+            // 獨立的 ESC 監聽器
+            const dialogEscListener = (e) => {
+                if (e.key === 'Escape') {
+                    overlay.remove();
+                    document.removeEventListener('keydown', dialogEscListener);
+                    resolve(null); // 取消操作
                 }
-                overlay.remove();
-                resolve({
-                    selectedApiKey,
-                    queryValues
-                });
             };
-
-            overlay.querySelector('#qt-query-cancel').onclick = () => {
-                overlay.remove();
-                resolve(null);
-            };
-        });
-    }
-
-    // === CSV用途選擇對話框 ===
-    function showCSVPurposeDialog() {
-        return new Promise(resolve => {
-            const contentHtml = `
-            <h3 class="qt-dialog-title">CSV匯入用途</h3>
-            <div style="margin-bottom:15px;font-size:14px;color:#555;">請選擇CSV檔案的用途：</div>
-            <div style="display:flex;flex-direction:column;gap:10px;">
-                <button id="qt-csv-purpose-query" class="qt-dialog-btn qt-dialog-btn-blue" style="width:100%;text-align:left;">
-                    📋 將CSV某欄作為查詢值
-                </button>
-                <button id="qt-csv-purpose-a17" class="qt-dialog-btn qt-dialog-btn-green" style="width:100%;text-align:left;">
-                    📊 勾選CSV欄位供A17合併顯示
-                </button>
-            </div>
-            <div style="text-align:center;margin-top:15px;">
-                <button id="qt-csv-purpose-cancel" class="qt-dialog-btn qt-dialog-btn-grey">取消</button>
-            </div>
-            `;
-
-            const {
-                overlay
-            } = createDialogBase('_CSVPurpose', contentHtml, '350px', 'auto');
+            document.addEventListener('keydown', dialogEscListener);
 
             const closeDialog = (value) => {
                 overlay.remove();
+                document.removeEventListener('keydown', dialogEscListener); // 確保移除監聽器
                 resolve(value);
             };
+            overlay.querySelector('#qt-querysetup-ok').onclick = () => {
+                const values = queryValuesInput.value.trim();
+                if (!selectedQueryDefinitionGlobal) {
+                    displaySystemNotification('請選查詢欄位類型', true);
+                    return;
+                }
+                if (!values) {
+                    displaySystemNotification(`請輸入${selectedQueryDefinitionGlobal.queryDisplayName}`, true);
+                    queryValuesInput.focus();
+                    return;
+                }
+                closeDialog({
+                    selectedApiKey: selectedQueryDefinitionGlobal.queryApiKey,
+                    queryValues: values
+                });
+            };
+            overlay.querySelector('#qt-querysetup-cancel').onclick = () => closeDialog(null);
+        });
+    }
 
-            overlay.querySelector('#qt-csv-purpose-query').onclick = () => closeDialog('query');
-            overlay.querySelector('#qt-csv-purpose-a17').onclick = () => closeDialog('a17merge');
+    function createCSVPurposeDialog() {
+        return new Promise(resolve => {
+            const contentHtml = `<h3 class="qt-dialog-title">選擇CSV檔案用途</h3><div style="display:flex; flex-direction:column; gap:10px;"><button id="qt-csv-purpose-query" class="qt-dialog-btn qt-dialog-btn-blue" style="margin-left:0;">將CSV某欄作為查詢值</button><button id="qt-csv-purpose-a17" class="qt-dialog-btn qt-dialog-btn-green" style="margin-left:0;">勾選CSV欄位供A17合併顯示</button></div><div style="text-align:center; margin-top:15px;"><button id="qt-csv-purpose-cancel" class="qt-dialog-btn qt-dialog-btn-grey">取消</button></div>`;
+            const {
+                overlay
+            } = createDialogBase('_CSVPurpose', contentHtml, '300px', 'auto');
+
+            // 獨立的 ESC 監聽器
+            const dialogEscListener = (e) => {
+                if (e.key === 'Escape') {
+                    overlay.remove();
+                    document.removeEventListener('keydown', dialogEscListener);
+                    resolve(null); // 取消操作
+                }
+            };
+            document.addEventListener('keydown', dialogEscListener);
+
+            const closeDialog = (value) => {
+                overlay.remove();
+                document.removeEventListener('keydown', dialogEscListener); // 確保移除監聽器
+                resolve(value);
+            };
+            overlay.querySelector('#qt-csv-purpose-query').onclick = () => closeDialog('fillQueryValues');
+            overlay.querySelector('#qt-csv-purpose-a17').onclick = () => closeDialog('prepareA17Merge');
             overlay.querySelector('#qt-csv-purpose-cancel').onclick = () => closeDialog(null);
         });
     }
 
-    // === 單筆重試對話框 ===
-    async function showRetryEditDialog(row) {
+    function createCSVColumnSelectionDialog(headers, title) {
         return new Promise(resolve => {
-            const queryButtonsHtml = QUERYABLE_FIELD_DEFINITIONS.map(def =>
-                `<button class="qt-querytype-btn" data-apikey="${def.queryApiKey}" style="background-color:${def.color};color:white;">${escapeHtml(def.queryDisplayName)}</button>`
-            ).join('');
-
-            const contentHtml = `
-            <h3 class="qt-dialog-title">調整單筆查詢條件</h3>
-            <div style="margin-bottom:10px;font-size:13px;color:#555;">選擇查詢欄位類型：</div>
-            <div id="qt-retry-querytype-buttons" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:15px;">
-                ${queryButtonsHtml}
-            </div>
-            <div style="margin-bottom:5px;font-size:13px;color:#555;">輸入查詢值：</div>
-            <input type="text" id="qt-retry-queryvalue-input" class="qt-input" placeholder="請輸入查詢值..." value="${escapeHtml(row[FIELD_DISPLAY_NAMES_MAP._queriedValue_]||'')}">
-            <div class="qt-dialog-flex-end">
-                <button id="qt-retry-edit-cancel" class="qt-dialog-btn qt-dialog-btn-grey">取消</button>
-                <button id="qt-retry-edit-ok" class="qt-dialog-btn qt-dialog-btn-blue">查詢</button>
-            </div>
-            `;
-
+            let optionsHtml = headers.map((header, index) => `<button class="qt-dialog-btn qt-dialog-btn-blue" data-index="${index}" style="margin:5px; width: calc(50% - 10px); text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">${escapeHtml(header)}</button>`).join('');
+            const contentHtml = `<h3 class="qt-dialog-title">${escapeHtml(title)}</h3><div style="display:flex; flex-wrap:wrap; justify-content:center; max-height:300px; overflow-y:auto; margin-bottom:15px;">${optionsHtml}</div><div style="text-align:center;"><button id="qt-csvcol-cancel" class="qt-dialog-btn qt-dialog-btn-grey">取消</button></div>`;
             const {
                 overlay
-            } = createDialogBase('_RetryEdit', contentHtml, '400px', 'auto');
+            } = createDialogBase('_CSVColSelect', contentHtml, '400px', 'auto');
 
-            let selectedApiKey = row._originalQueryApiKey || QUERYABLE_FIELD_DEFINITIONS[0].queryApiKey;
-            const queryTypeButtons = overlay.querySelectorAll('.qt-querytype-btn');
+            // 獨立的 ESC 監聽器
+            const dialogEscListener = (e) => {
+                if (e.key === 'Escape') {
+                    overlay.remove();
+                    document.removeEventListener('keydown', dialogEscListener);
+                    resolve(null); // 取消操作
+                }
+            };
+            document.addEventListener('keydown', dialogEscListener);
 
-            function setActiveButton(apiKey) {
-                queryTypeButtons.forEach(btn => {
-                    const isSelected = btn.dataset.apikey === apiKey;
-                    btn.style.border = isSelected ? `2px solid ${btn.style.backgroundColor}` : '2px solid transparent';
-                    btn.style.boxShadow = isSelected ? `0 0 6px ${btn.style.backgroundColor}80` : 'none';
-                });
-            }
-
-            queryTypeButtons.forEach(btn => {
-                btn.onclick = () => {
-                    selectedApiKey = btn.dataset.apikey;
-                    setActiveButton(selectedApiKey);
-                };
+            const closeDialog = (value) => {
+                overlay.remove();
+                document.removeEventListener('keydown', dialogEscListener); // 確保移除監聽器
+                resolve(value);
+            };
+            overlay.querySelectorAll('.qt-dialog-btn[data-index]').forEach(btn => {
+                btn.onclick = () => closeDialog(parseInt(btn.dataset.index));
             });
+            overlay.querySelector('#qt-csvcol-cancel').onclick = () => closeDialog(null);
+        });
+    }
 
-            setActiveButton(selectedApiKey);
+    function createCSVColumnCheckboxDialog(headers, title) {
+        return new Promise(resolve => {
+            let checkboxesHtml = headers.map((header, index) => `<div style="margin-bottom: 8px; display:flex; align-items:center;"><input type="checkbox" id="qt-csv-header-cb-${index}" value="${escapeHtml(header)}" style="margin-right:8px; transform:scale(1.2);"><label for="qt-csv-header-cb-${index}" style="font-size:14px;">${escapeHtml(header)}</label></div>`).join('');
+            const contentHtml = `<h3 class="qt-dialog-title">${escapeHtml(title)}</h3><div style="max-height: 300px; overflow-y: auto; margin-bottom: 15px; border: 1px solid #eee; padding: 10px; border-radius: 4px;">${checkboxesHtml}</div><div class="qt-dialog-flex-end"><button id="qt-csvcb-cancel" class="qt-dialog-btn qt-dialog-btn-grey">取消</button><button id="qt-csvcb-ok" class="qt-dialog-btn qt-dialog-btn-blue">確定勾選</button></div>`;
+            const {
+                overlay
+            } = createDialogBase('_CSVCheckbox', contentHtml, '400px', 'auto');
 
-            overlay.querySelector('#qt-retry-edit-ok').onclick = () => {
-                const queryValue = overlay.querySelector('#qt-retry-queryvalue-input').value.trim();
-                if (!queryValue) {
-                    displaySystemNotification('請輸入查詢值', true);
+            // 獨立的 ESC 監聽器
+            const dialogEscListener = (e) => {
+                if (e.key === 'Escape') {
+                    overlay.remove();
+                    document.removeEventListener('keydown', dialogEscListener);
+                    resolve(null); // 取消操作
+                }
+            };
+            document.addEventListener('keydown', dialogEscListener);
+
+            const closeDialog = (value) => {
+                overlay.remove();
+                document.removeEventListener('keydown', dialogEscListener); // 確保移除監聽器
+                resolve(value);
+            };
+            overlay.querySelector('#qt-csvcb-ok').onclick = () => {
+                const selected = [];
+                overlay.querySelectorAll('input[type="checkbox"]:checked').forEach(cb => selected.push(cb.value)); // 修正為 overlay.querySelectorAll
+                if (selected.length === 0) {
+                    displaySystemNotification('請至少勾選一個欄位', true);
                     return;
                 }
-                overlay.remove();
-                resolve({
-                    apiKey: selectedApiKey,
-                    queryValue
-                });
+                closeDialog(selected);
             };
+            overlay.querySelector('#qt-csvcb-cancel').onclick = () => closeDialog(null);
+        });
+    }
 
-            overlay.querySelector('#qt-retry-edit-cancel').onclick = () => {
+    function createA17TextSettingDialog() {
+        return new Promise(resolve => {
+            const s = StateManager.a17Mode.textSettings;
+            const contentHtml = `<h3 class="qt-dialog-title">A17 通知文本設定</h3><div style="display:grid; grid-template-columns: 1fr; gap: 15px;"><div><label for="qt-a17-mainContent" style="font-weight:bold; font-size:13px; display:block; margin-bottom:5px;">主文案內容：</label><textarea id="qt-a17-mainContent" class="qt-textarea" style="height:150px;">${escapeHtml(s.mainContent)}</textarea><div style="display:flex; gap:10px; margin-top:5px; flex-wrap:wrap;"><label style="font-size:12px;">字體大小: <input type="number" id="qt-a17-mainFontSize" value="${s.mainFontSize}" min="8" max="24" step="0.5" class="qt-input" style="width:60px; padding:3px; margin-bottom:0;"> pt</label><label style="font-size:12px;">行高: <input type="number" id="qt-a17-mainLineHeight" value="${s.mainLineHeight}" min="1" max="3" step="0.1" class="qt-input" style="width:60px; padding:3px; margin-bottom:0;"> 倍</label><label style="font-size:12px;">顏色: <input type="color" id="qt-a17-mainFontColor" value="${s.mainFontColor}" style="padding:1px; height:25px; vertical-align:middle;"></label></div></div><div><label style="font-weight:bold; font-size:13px; display:block; margin-bottom:5px;">動態日期設定 (相對於今天)：</label><div style="display:flex; gap:15px; align-items:center; margin-bottom:5px;flex-wrap:wrap;"><label style="font-size:12px;">產檔時間偏移: <input type="number" id="qt-a17-genDateOffset" value="${s.genDateOffset}" class="qt-input" style="width:60px; padding:3px; margin-bottom:0;"> 天</label><label style="font-size:12px;">比對時間偏移: <input type="number" id="qt-a17-compDateOffset" value="${s.compDateOffset}" class="qt-input" style="width:60px; padding:3px; margin-bottom:0;"> 天</label></div><div style="display:flex; gap:10px; flex-wrap:wrap;"><label style="font-size:12px;">日期字體大小: <input type="number" id="qt-a17-dateFontSize" value="${s.dateFontSize}" min="6" max="16" step="0.5" class="qt-input" style="width:60px; padding:3px; margin-bottom:0;"> pt</label><label style="font-size:12px;">日期行高: <input type="number" id="qt-a17-dateLineHeight" value="${s.dateLineHeight}" min="1" max="3" step="0.1" class="qt-input" style="width:60px; padding:3px; margin-bottom:0;"> 倍</label><label style="font-size:12px;">日期顏色: <input type="color" id="qt-a17-dateFontColor" value="${s.dateFontColor}" style="padding:1px; height:25px; vertical-align:middle;"></label></div></div><div><label style="font-weight:bold; font-size:13px; display:block; margin-bottom:5px;">預覽效果 (此區可臨時編輯，僅影響當次複製)：</label><div id="qt-a17-preview" contenteditable="true" style="border:1px solid #ccc; padding:10px; min-height:100px; max-height:200px; overflow-y:auto; font-size:${s.mainFontSize}pt; line-height:${s.mainLineHeight}; color:${s.mainFontColor}; background:#f9f9f9; border-radius:4px;"></div></div></div><div class="qt-dialog-flex-between" style="margin-top:20px;"><button id="qt-a17-text-reset" class="qt-dialog-btn qt-dialog-btn-orange">重設預設</button><div><button id="qt-a17-text-cancel" class="qt-dialog-btn qt-dialog-btn-grey">取消</button><button id="qt-a17-text-save" class="qt-dialog-btn qt-dialog-btn-blue">儲存設定</button></div></div>`;
+            const {
+                overlay
+            } = createDialogBase('_A17TextSettings', contentHtml, '550px', 'auto');
+            const previewEl = overlay.querySelector('#qt-a17-preview');
+            const getSettingsFromUI = () => ({
+                mainContent: overlay.querySelector('#qt-a17-mainContent').value,
+                mainFontSize: parseFloat(overlay.querySelector('#qt-a17-mainFontSize').value),
+                mainLineHeight: parseFloat(overlay.querySelector('#qt-a17-mainLineHeight').value),
+                mainFontColor: overlay.querySelector('#qt-a17-mainFontColor').value,
+                dateFontSize: parseFloat(overlay.querySelector('#qt-a17-dateFontSize').value),
+                dateLineHeight: parseFloat(overlay.querySelector('#qt-a17-dateLineHeight').value),
+                dateFontColor: overlay.querySelector('#qt-a17-dateFontColor').value,
+                genDateOffset: parseInt(overlay.querySelector('#qt-a17-genDateOffset').value),
+                compDateOffset: parseInt(overlay.querySelector('#qt-a17-compDateOffset').value)
+            });
+            const updatePreview = () => {
+                const currentUISettings = getSettingsFromUI();
+                const today = new Date();
+                const genDate = new Date(today);
+                genDate.setDate(today.getDate() + currentUISettings.genDateOffset);
+                const compDate = new Date(today);
+                compDate.setDate(today.getDate() + currentUISettings.compDateOffset);
+                const genDateStr = formatDate(genDate);
+                const compDateStr = formatDate(compDate);
+                let previewContent = escapeHtml(currentUISettings.mainContent).replace(/\n/g, '<br>') + `<br><br><span class="qt-a17-dynamic-date" style="font-size:${currentUISettings.dateFontSize}pt; line-height:${currentUISettings.dateLineHeight}; color:${currentUISettings.dateFontColor};">產檔時間：${genDateStr}<br>比對時間：${compDateStr}</span>`;
+                previewEl.innerHTML = previewContent;
+                previewEl.style.fontSize = currentUISettings.mainFontSize + 'pt';
+                previewEl.style.lineHeight = currentUISettings.mainLineHeight;
+                previewEl.style.color = currentUISettings.mainFontColor;
+            };
+            ['#qt-a17-mainContent', '#qt-a17-mainFontSize', '#qt-a17-mainLineHeight', '#qt-a17-mainFontColor', '#qt-a17-dateFontSize', '#qt-a17-dateLineHeight', '#qt-a17-dateFontColor', '#qt-a17-genDateOffset', '#qt-a17-compDateOffset'].forEach(selector => {
+                const el = overlay.querySelector(selector);
+                if (el.type === 'color') el.onchange = updatePreview;
+                else el.oninput = updatePreview;
+            });
+            updatePreview();
+
+            // 獨立的 ESC 監聽器
+            const dialogEscListener = (e) => {
+                if (e.key === 'Escape') {
+                    overlay.remove();
+                    document.removeEventListener('keydown', dialogEscListener);
+                    resolve(null); // 取消操作
+                }
+            };
+            document.addEventListener('keydown', dialogEscListener);
+
+            const closeDialog = (value) => {
                 overlay.remove();
-                resolve(null);
+                document.removeEventListener('keydown', dialogEscListener); // 確保移除監聽器
+                resolve(value);
+            };
+            overlay.querySelector('#qt-a17-text-save').onclick = () => {
+                const newSettings = getSettingsFromUI();
+                if (!newSettings.mainContent.trim()) {
+                    displaySystemNotification('主文案內容不可為空', true);
+                    return;
+                }
+                StateManager.a17Mode.textSettings = newSettings;
+                localStorage.setItem(A17_TEXT_SETTINGS_STORAGE_KEY, JSON.stringify(newSettings));
+                displaySystemNotification('A17文本設定已儲存', false);
+                closeDialog(true);
+            };
+            overlay.querySelector('#qt-a17-text-cancel').onclick = () => closeDialog(null);
+            overlay.querySelector('#qt-a17-text-reset').onclick = () => {
+                overlay.querySelector('#qt-a17-mainContent').value = A17_DEFAULT_TEXT_CONTENT;
+                overlay.querySelector('#qt-a17-mainFontSize').value = 12;
+                overlay.querySelector('#qt-a17-mainLineHeight').value = 1.5;
+                overlay.querySelector('#qt-a17-mainFontColor').value = '#333333';
+                overlay.querySelector('#qt-a17-dateFontSize').value = 8;
+                overlay.querySelector('#qt-a17-dateLineHeight').value = 1.2;
+                overlay.querySelector('#qt-a17-dateFontColor').value = '#555555';
+                overlay.querySelector('#qt-a17-genDateOffset').value = -3;
+                overlay.querySelector('#qt-a17-compDateOffset').value = 0;
+                updatePreview();
             };
         });
     }
 
-    // === 表格渲染函數 ===
-    function populateTableRows(data) {
-        if (!StateManager.currentTable.tableBodyElement || !StateManager.currentTable.tableHeadElement) {
-            return;
-        }
-
-        const tbody = StateManager.currentTable.tableBodyElement;
-        const thead = StateManager.currentTable.tableHeadElement;
-
-        // 清空表格
-        tbody.innerHTML = '';
-
-        if (!data || data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="100%" style="text-align:center;color:#666;padding:20px;">暫無資料</td></tr>';
-            return;
-        }
-
-        // 渲染表格行
-        data.forEach((row, rowIndex) => {
-            const tr = document.createElement('tr');
-
-            StateManager.currentTable.currentHeaders.forEach(headerKey => {
-                const td = document.createElement('td');
-                let cellValue = row[headerKey];
-
-                if (cellValue === null || cellValue === undefined) {
-                    cellValue = '';
+    async function performApiQuery(queryValue, apiKey) {
+        const reqBody = {
+            currentPage: 1,
+            pageSize: 10
+        };
+        reqBody[apiKey] = queryValue;
+        const fetchOpts = {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(reqBody),
+        };
+        if (apiAuthToken) fetchOpts.headers['SSO-TOKEN'] = apiAuthToken;
+        let retries = 1;
+        while (retries >= 0) {
+            try {
+                const res = await fetch(CURRENT_API_URL, fetchOpts);
+                const data = await res.json();
+                if (res.status === 401) {
+                    apiAuthToken = null;
+                    TokenManager.clear();
+                    return {
+                        error: 'token_invalid',
+                        data: null
+                    };
                 }
-
-                // 特殊處理查詢結果欄位
-                if (headerKey === FIELD_DISPLAY_NAMES_MAP._apiQueryStatus) {
-                    td.innerHTML = escapeHtml(String(cellValue));
-
-                    // 檢查是否需要添加重試按鈕
-                    if (String(cellValue).includes('查詢失敗') || String(cellValue).includes('查無資料') || String(cellValue).includes('TOKEN失效') || String(cellValue).includes('網路錯誤')) {
-                        const retryBtn = document.createElement('button');
-                        retryBtn.className = 'qt-retry-btn';
-                        retryBtn.textContent = '重新撈取';
-                        retryBtn.dataset.rowIndex = rowIndex;
-                        td.appendChild(document.createElement('br'));
-                        td.appendChild(retryBtn);
-
-                        if (row._retryFailed) {
-                            const editBtn = document.createElement('button');
-                            editBtn.className = 'qt-retry-edit-btn';
-                            editBtn.textContent = '調整查詢條件';
-                            editBtn.dataset.rowIndex = rowIndex;
-                            td.appendChild(editBtn);
-                        }
-                    }
-                } else if (headerKey === FIELD_DISPLAY_NAMES_MAP.statusCombined) {
-                    // 狀態欄位特殊處理
-                    td.innerHTML = String(cellValue);
-                } else if (isEditMode && headerKey !== FIELD_DISPLAY_NAMES_MAP.NO && headerKey !== FIELD_DISPLAY_NAMES_MAP._queriedValue_) {
-                    // 編輯模式下的可編輯儲存格
-                    td.className = 'qt-editable-cell';
-                    td.innerHTML = escapeHtml(String(cellValue));
-                    td.onclick = () => editCell(td, row, headerKey);
-                } else {
-                    td.innerHTML = escapeHtml(String(cellValue));
+                if (!res.ok) {
+                    throw new Error(`API請求錯誤: ${res.status} ${res.statusText}`);
                 }
-
-                tr.appendChild(td);
-            });
-
-            // 編輯模式下添加刪除按鈕
-            if (isEditMode) {
-                const deleteTd = document.createElement('td');
-                const deleteBtn = document.createElement('button');
-                deleteBtn.className = 'qt-delete-btn';
-                deleteBtn.innerHTML = '🗑️';
-                deleteBtn.onclick = () => {
-                    if (confirm('確定要刪除這一列嗎？')) {
-                        StateManager.pushSnapshot('刪除列');
-                        data.splice(rowIndex, 1);
-                        populateTableRows(data);
-                        displaySystemNotification('已刪除列', false);
-                    }
+                return {
+                    error: null,
+                    data: data,
+                    success: data && data.records && data.records.length > 0
                 };
-                deleteTd.appendChild(deleteBtn);
-                tr.appendChild(deleteTd);
+            } catch (e) {
+                console.error(`查詢 ${queryValue} 錯誤 (嘗試 ${2-retries}):`, e);
+                if (retries > 0) {
+                    displaySystemNotification(`查詢 ${queryValue} 失敗，2秒後重試...`, true, 1800);
+                    await new Promise(r => setTimeout(r, 2000));
+                    retries--;
+                } else {
+                    return {
+                        error: 'network_error',
+                        data: null
+                    };
+                }
+            }
+        }
+    }
+
+    // --- 表格渲染及操作函數 (保持版本 B 的優化) ---
+    function renderResultsTableUI(dataToRender) {
+        // 不再移除 toolMainContainerEl，因為它是整個工具的根元素
+        // StateManager.currentTable.mainUIElement?.remove(); // 這行應該被移除或處理為清空內容
+
+        // 清空主視窗內容，以便重新渲染表格
+        toolMainContainerEl.innerHTML = `
+        <div class="qt-main-title-bar">凱基人壽案件查詢結果</div>
+        <div class="qt-main-content-wrapper">
+            <div class="qt-main-controls-header">
+                <div class="qt-summary-section"></div>
+                <div class="qt-buttons-group-left"></div>
+                <div class="qt-filter-input-wrapper">
+                    <input type="text" placeholder="篩選表格內容..." class="qt-input qt-filter-input">
+                </div>
+                <div class="qt-buttons-group-right"></div>
+            </div>
+            <div class="qt-a17-unit-buttons-container"></div>
+            <div class="qt-a17-text-controls-container"></div>
+            <div class="qt-table-scroll-wrapper">
+                <table class="qt-table-results">
+                    <thead></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+    `;
+
+        // 重新獲取新的 DOM 元素引用
+        StateManager.currentTable.mainUIElement = toolMainContainerEl; // 指向整個工具容器
+        StateManager.currentTable.tableHeadElement = toolMainContainerEl.querySelector('.qt-table-results thead');
+        StateManager.currentTable.tableBodyElement = toolMainContainerEl.querySelector('.qt-table-results tbody');
+        StateManager.currentTable.a17UnitButtonsContainer = toolMainContainerEl.querySelector('.qt-a17-unit-buttons-container');
+
+        // 環境提示已經存在於 toolMainContainerEl，無需重新創建或更新其引用
+        // EnvManager.updateDisplay(); // 可在此處再次呼叫確保顯示狀態
+
+        const titleBar = toolMainContainerEl.querySelector('.qt-main-title-bar');
+        const controlsHeader = toolMainContainerEl.querySelector('.qt-main-controls-header');
+        const summarySec = toolMainContainerEl.querySelector('.qt-summary-section');
+        const filterInput = toolMainContainerEl.querySelector('.qt-filter-input');
+        const buttonsGroupLeft = toolMainContainerEl.querySelector('.qt-buttons-group-left');
+        const buttonsGroupRight = toolMainContainerEl.querySelector('.qt-buttons-group-right');
+        const a17UnitBtnsCtr = toolMainContainerEl.querySelector('.qt-a17-unit-buttons-container');
+        const a17TextControls = toolMainContainerEl.querySelector('.qt-a17-text-controls-container');
+
+        // 重新綁定拖曳功能（因為內容被清空了）
+        titleBar.onmousedown = (e) => {
+            if (e.target !== titleBar) return;
+            e.preventDefault();
+            dragState.dragging = true;
+            dragState.startX = e.clientX;
+            dragState.startY = e.clientY;
+            dragState.initialX = toolMainContainerEl.offsetLeft;
+            dragState.initialY = toolMainContainerEl.offsetTop;
+            titleBar.style.cursor = 'grabbing';
+            toolMainContainerEl.style.transform = 'none';
+        };
+        document.onmousemove = (e) => {
+            if (dragState.dragging) {
+                const dx = e.clientX - dragState.startX;
+                const dy = e.clientY - dragState.startY;
+                toolMainContainerEl.style.left = (dragState.initialX + dx) + 'px';
+                toolMainContainerEl.style.top = (dragState.initialY + dy) + 'px';
+            }
+        };
+        document.onmouseup = () => {
+            if (dragState.dragging) {
+                dragState.dragging = false;
+                titleBar.style.cursor = 'grab';
+            }
+        };
+
+        // 清除並重新創建按鈕，以便重新綁定事件
+        buttonsGroupLeft.innerHTML = '';
+        buttonsGroupRight.innerHTML = '';
+
+        [{
+                id: 'ClearConditions',
+                text: '清除條件',
+                cls: 'qt-dialog-btn-grey',
+                group: buttonsGroupLeft
+            },
+            {
+                id: 'Requery',
+                text: '重新查詢',
+                cls: 'qt-dialog-btn-orange',
+                group: buttonsGroupLeft
+            },
+            {
+                id: 'A17',
+                text: 'A17作業',
+                cls: 'qt-dialog-btn-purple',
+                group: buttonsGroupLeft
+            },
+            {
+                id: 'CopyTable',
+                text: '複製表格',
+                cls: 'qt-dialog-btn-green',
+                group: buttonsGroupLeft
+            },
+            {
+                id: 'EditMode',
+                text: '編輯模式',
+                cls: 'qt-dialog-btn-blue',
+                group: buttonsGroupLeft
+            },
+            {
+                id: 'AddRow',
+                text: '+ 新增列',
+                cls: 'qt-dialog-btn-blue',
+                group: buttonsGroupLeft,
+                style: 'display:none;'
+            }
+        ].forEach(cfg => {
+            const btn = document.createElement('button');
+            btn.id = TOOL_MAIN_CONTAINER_ID + '_btn' + cfg.id;
+            btn.textContent = cfg.text;
+            btn.className = `qt-dialog-btn ${cfg.cls}`;
+            if (cfg.style) btn.style.cssText += cfg.style;
+            cfg.group.appendChild(btn)
+        });
+
+        const closeBtn = document.createElement('button');
+        closeBtn.id = TOOL_MAIN_CONTAINER_ID + '_btnCloseTool';
+        closeBtn.textContent = '關閉工具';
+        closeBtn.className = 'qt-dialog-btn qt-dialog-btn-red';
+        buttonsGroupRight.appendChild(closeBtn);
+
+        // --- 控制按鈕事件綁定 ---
+        filterInput.oninput = () => applyTableFilter();
+        toolMainContainerEl.querySelector(`#${TOOL_MAIN_CONTAINER_ID}_btnClearConditions`).onclick = handleClearConditions;
+        toolMainContainerEl.querySelector(`#${TOOL_MAIN_CONTAINER_ID}_btnRequery`).onclick = () => {
+            // 重新啟動工具，會再次觸發環境自動判斷和初始化
+            executeCaseQueryTool();
+        };
+
+        const a17Btn = toolMainContainerEl.querySelector(`#${TOOL_MAIN_CONTAINER_ID}_btnA17`);
+        a17Btn.onmousedown = (e) => {
+            if (e.button !== 0) return;
+            a17ButtonLongPressTimer = setTimeout(() => {
+                a17ButtonLongPressTimer = null;
+                toggleA17Mode(true);
+            }, 700);
+        };
+        a17Btn.onmouseup = () => {
+            if (a17ButtonLongPressTimer) {
+                clearTimeout(a17ButtonLongPressTimer);
+                a17ButtonLongPressTimer = null;
+                toggleA17Mode(false);
+            }
+        };
+        a17Btn.onmouseleave = () => {
+            if (a17ButtonLongPressTimer) {
+                clearTimeout(a17ButtonLongPressTimer);
+                a17ButtonLongPressTimer = null;
+            }
+        };
+        toolMainContainerEl.querySelector(`#${TOOL_MAIN_CONTAINER_ID}_btnCopyTable`).onclick = handleCopyTable;
+        toolMainContainerEl.querySelector(`#${TOOL_MAIN_CONTAINER_ID}_btnEditMode`).onclick = toggleEditMode;
+        toolMainContainerEl.querySelector(`#${TOOL_MAIN_CONTAINER_ID}_btnAddRow`).onclick = handleAddRowToTable;
+        closeBtn.onclick = () => {
+            if (confirm('確定要關閉查詢工具嗎？')) {
+                toolMainContainerEl.remove(); // 移除整個工具主視窗
+                document.removeEventListener('keydown', mainUIEscListener); // 移除ESC監聽
+                displaySystemNotification('查詢工具已關閉', false);
+            }
+        };
+        toolMainContainerEl.querySelector(`#${TOOL_MAIN_CONTAINER_ID}_btnA17EditText`).onclick = async () => {
+            await createA17TextSettingDialog();
+        };
+
+        // --- 主 UI 的 ESC 關閉監聽器 ---
+        // 每次渲染 UI 時綁定，舊的會被新的覆蓋，或者確保移除舊的
+        document.removeEventListener('keydown', mainUIEscListener); // 確保移除舊的
+        document.addEventListener('keydown', mainUIEscListener); // 綁定新的
+
+        updateSummaryCount(dataToRender.length);
+        if (StateManager.a17Mode.isActive) { // 修正為 StateManager.a17Mode.isActive
+            renderA17ModeUI();
+            populateTableRows(StateManager.baseA17MasterData);
+            updateA17UnitButtonCounts();
+        } else {
+            renderNormalModeUI();
+            populateTableRows(dataToRender);
+        }
+    }
+
+    // --- 主 UI ESC 關閉的獨立監聽器 ---
+    const mainUIEscListener = (e) => {
+        // 檢查是否是 ESC 鍵，並且沒有其他對話框開啟
+        // 查找 toolMainContainerEl 內的 overlay
+        if (e.key === 'Escape' && toolMainContainerEl && !toolMainContainerEl.querySelector(`[id^="${TOOL_MAIN_CONTAINER_ID}_"][id$="_overlay"]`)) {
+            if (confirm('確定要關閉查詢工具嗎？')) {
+                toolMainContainerEl.remove(); // 移除整個工具主視窗
+                document.removeEventListener('keydown', mainUIEscListener);
+                displaySystemNotification('查詢工具已關閉', false);
+            }
+        }
+    };
+
+    // --- 表格相關輔助函數 ---
+    function updateSummaryCount(visibleRowCount) {
+        const summaryEl = toolMainContainerEl?.querySelector('.qt-summary-section'); // 修正為 toolMainContainerEl 內查找
+        if (!summaryEl) return;
+        let baseDataCount = StateManager.a17Mode.isActive ? StateManager.baseA17MasterData.length : StateManager.originalQueryResults.length;
+        let text = `查詢結果：<strong>${baseDataCount}</strong>筆`;
+        const filterInput = toolMainContainerEl.querySelector('.qt-filter-input'); // 修正為 toolMainContainerEl 內查找
+        const isFiltered = (filterInput && filterInput.value.trim() !== '') || (StateManager.a17Mode.isActive && StateManager.a17Mode.selectedUnits.size > 0);
+        if (isFiltered && visibleRowCount !== baseDataCount) {
+            text += ` (篩選後顯示 <strong>${visibleRowCount}</strong> 筆)`;
+        }
+        summaryEl.innerHTML = text;
+    }
+
+
+    function sortTableByColumn(headerKey) {
+        const currentDirection = StateManager.currentTable.sortDirections[headerKey] || 'asc';
+        const newDirection = currentDirection === 'asc' ? 'desc' : 'asc';
+        StateManager.currentTable.sortDirections = {}; // 清除其他欄位的排序方向
+        StateManager.currentTable.sortDirections[headerKey] = newDirection;
+
+        const currentData = StateManager.a17Mode.isActive ? StateManager.baseA17MasterData : StateManager.originalQueryResults;
+        currentData.sort((a, b) => {
+            let aVal = a[headerKey] || '';
+            let bVal = b[headerKey] || '';
+
+            // 數值類型轉換 (針對序號)
+            if (headerKey === FIELD_DISPLAY_NAMES_MAP.NO) {
+                aVal = parseInt(String(aVal)) || 0;
+                bVal = parseInt(String(bVal)) || 0;
+            } else {
+                aVal = String(aVal).toLowerCase();
+                bVal = String(bVal).toLowerCase();
             }
 
-            tbody.appendChild(tr);
+            if (newDirection === 'asc') {
+                return aVal > bVal ? 1 : (aVal < bVal ? -1 : 0);
+            } else {
+                return aVal < bVal ? 1 : (aVal > bVal ? -1 : 0);
+            }
         });
 
-        // 綁定重試按鈕事件
-        tbody.querySelectorAll('.qt-retry-btn').forEach(btn => {
-            btn.onclick = async (e) => {
-                e.stopPropagation();
-                const rowIndex = Number(btn.dataset.rowIndex);
-                const row = data[rowIndex];
-                const apiKey = row._originalQueryApiKey || selectedQueryDefinitionGlobal.queryApiKey;
-                const queryValue = row._originalQueryValue || row[FIELD_DISPLAY_NAMES_MAP._queriedValue_];
-
-                btn.disabled = true;
-                btn.textContent = '查詢中...';
-
-                const apiResult = await performApiQuery(queryValue, apiKey);
-
-                if (apiResult.error === 'token_invalid') {
-                    row._retryFailed = true;
-                    row[FIELD_DISPLAY_NAMES_MAP._apiQueryStatus] = '❌ TOKEN失效';
-                    displaySystemNotification('TOKEN失效，請重新設定', true);
-                } else if (apiResult.success) {
-                    // 成功，更新該列資料
-                    Object.assign(row, apiResult.data.records[0]);
-                    ALL_DISPLAY_FIELDS_API_KEYS_MAIN.forEach(dKey => {
-                        const displayName = FIELD_DISPLAY_NAMES_MAP[dKey] || dKey;
-                        let cellValue = apiResult.data.records[0][dKey];
-
-                        if (cellValue === null || cellValue === undefined) {
-                            cellValue = '';
-                        } else {
-                            cellValue = String(cellValue);
-                        }
-
-                        if (dKey === 'statusCombined') {
-                            const mainS = apiResult.data.records[0].mainStatus || '';
-                            const subS = apiResult.data.records[0].subStatus || '';
-                            row[displayName] = `<span style="font-weight:bold;">${escapeHtml(mainS)}</span>` + (subS ? ` <span style="color:#777;">(${escapeHtml(subS)})</span>` : '');
-                        } else if (dKey === UNIT_MAP_FIELD_API_KEY) {
-                            const unitCodePrefix = getFirstLetter(cellValue);
-                            const mappedUnitName = UNIT_CODE_MAPPINGS[unitCodePrefix] || cellValue;
-                            row[displayName] = unitCodePrefix && UNIT_CODE_MAPPINGS[unitCodePrefix] ? `${unitCodePrefix}-${mappedUnitName.replace(/^[A-Z]-/,'')}` : mappedUnitName;
-                        } else if (dKey === 'uwApprover' || dKey === 'approvalUser') {
-                            row[displayName] = extractName(cellValue);
-                        } else {
-                            row[displayName] = cellValue;
-                        }
-                    });
-                    row[FIELD_DISPLAY_NAMES_MAP._apiQueryStatus] = '✔️ 成功';
-                    row._retryFailed = false;
-                    displaySystemNotification('單筆重查成功', false);
-                } else {
-                    row._retryFailed = true;
-                    row[FIELD_DISPLAY_NAMES_MAP._apiQueryStatus] = '❌ 查詢失敗';
-                    displaySystemNotification('單筆重查失敗，請調整條件', true);
-                }
-
-                populateTableRows(data);
-            };
-        });
-
-        // 綁定調整條件按鈕事件
-        tbody.querySelectorAll('.qt-retry-edit-btn').forEach(btn => {
-            btn.onclick = async (e) => {
-                e.stopPropagation();
-                const rowIndex = Number(btn.dataset.rowIndex);
-                const row = data[rowIndex];
-
-                const result = await showRetryEditDialog(row);
-                if (result) {
-                    btn.disabled = true;
-                    btn.textContent = '查詢中...';
-
-                    const apiResult = await performApiQuery(result.queryValue, result.apiKey);
-
-                    if (apiResult.error === 'token_invalid') {
-                        row._retryFailed = true;
-                        row[FIELD_DISPLAY_NAMES_MAP._apiQueryStatus] = '❌ TOKEN失效';
-                        displaySystemNotification('TOKEN失效，請重新設定', true);
-                    } else if (apiResult.success) {
-                        // 成功，更新該列資料
-                        Object.assign(row, apiResult.data.records[0]);
-                        ALL_DISPLAY_FIELDS_API_KEYS_MAIN.forEach(dKey => {
-                            const displayName = FIELD_DISPLAY_NAMES_MAP[dKey] || dKey;
-                            let cellValue = apiResult.data.records[0][dKey];
-
-                            if (cellValue === null || cellValue === undefined) {
-                                cellValue = '';
-                            } else {
-                                cellValue = String(cellValue);
-                            }
-
-                            if (dKey === 'statusCombined') {
-                                const mainS = apiResult.data.records[0].mainStatus || '';
-                                const subS = apiResult.data.records[0].subStatus || '';
-                                row[displayName] = `<span style="font-weight:bold;">${escapeHtml(mainS)}</span>` + (subS ? ` <span style="color:#777;">(${escapeHtml(subS)})</span>` : '');
-                            } else if (dKey === UNIT_MAP_FIELD_API_KEY) {
-                                const unitCodePrefix = getFirstLetter(cellValue);
-                                const mappedUnitName = UNIT_CODE_MAPPINGS[unitCodePrefix] || cellValue;
-                                row[displayName] = unitCodePrefix && UNIT_CODE_MAPPINGS[unitCodePrefix] ? `${unitCodePrefix}-${mappedUnitName.replace(/^[A-Z]-/,'')}` : mappedUnitName;
-                            } else if (dKey === 'uwApprover' || dKey === 'approvalUser') {
-                                row[displayName] = extractName(cellValue);
-                            } else {
-                                row[displayName] = cellValue;
-                            }
-                        });
-                        row[FIELD_DISPLAY_NAMES_MAP._apiQueryStatus] = '✔️ 成功';
-                        row._retryFailed = false;
-                        row._originalQueryApiKey = result.apiKey;
-                        row._originalQueryValue = result.queryValue;
-                        displaySystemNotification('調整條件後查詢成功', false);
-                    } else {
-                        row[FIELD_DISPLAY_NAMES_MAP._apiQueryStatus] = '❌ 查詢失敗';
-                        displaySystemNotification('調整條件後查詢失敗', true);
-                    }
-
-                    populateTableRows(data);
-                }
-            };
-        });
+        populateTableRows(currentData);
+        // 更新排序箭頭
+        const thead = StateManager.currentTable.tableHeadElement;
+        thead.querySelectorAll('th .sort-arrow').forEach(arrow => arrow.remove());
+        const targetTh = Array.from(thead.querySelectorAll('th')).find(th => th.textContent.includes(headerKey));
+        if (targetTh) {
+            const arrow = document.createElement('span');
+            arrow.className = 'sort-arrow';
+            arrow.innerHTML = newDirection === 'asc' ? ' &#9650;' : ' &#9660;'; // 使用 unicode 三角形箭頭
+            arrow.style.cssText = 'color:#007bff;font-weight:bold;';
+            targetTh.appendChild(arrow);
+        }
     }
 
-    // === 儲存格編輯函數 ===
-    function editCell(td, row, headerKey) {
-        if (td.querySelector('input') || td.querySelector('select')) return;
+    function startCellEdit(td, row, headerKey, rowIndex) {
+        if (td.querySelector('input') || td.querySelector('select')) return; // 避免重複編輯
 
-        const originalValue = row[headerKey] || '';
+        StateManager.pushSnapshot('編輯儲存格'); // 在編輯前保存狀態
+
+        const originalValue = row[headerKey] === null || row[headerKey] === undefined ? '' : String(row[headerKey]);
         const originalHtml = td.innerHTML;
+        const currentData = StateManager.a17Mode.isActive ? StateManager.baseA17MasterData : StateManager.originalQueryResults;
+        const currentRowElement = StateManager.currentTable.tableBodyElement.children[rowIndex];
+        if (currentRowElement) {
+            currentRowElement.classList.add('qt-editing-row'); // 標記正在編輯的行
+            currentRowElement.style.backgroundColor = '#fffacd'; // 編輯中的顏色
+        }
+
+
+        const saveEdit = () => {
+            let newValue;
+            if (select) {
+                newValue = select.value;
+            } else {
+                newValue = input.value.trim();
+            }
+
+            row[headerKey] = newValue; // 更新數據模型
+            td.innerHTML = escapeHtml(newValue); // 更新顯示
+            displaySystemNotification('已更新儲存格', false);
+
+            if (currentRowElement) {
+                currentRowElement.classList.remove('qt-editing-row');
+                // 恢復原始行顏色
+                currentRowElement.style.backgroundColor = rowIndex % 2 ? '#f8f9fa' : '#ffffff';
+            }
+
+            // 移除事件監聽器
+            cleanupListeners();
+        };
+
+        const cancelEdit = () => {
+            td.innerHTML = originalHtml; // 恢復原始內容
+            displaySystemNotification('編輯已取消', true, 1500);
+            if (currentRowElement) {
+                currentRowElement.classList.remove('qt-editing-row');
+                currentRowElement.style.backgroundColor = rowIndex % 2 ? '#f8f9fa' : '#ffffff';
+            }
+            cleanupListeners();
+        };
+
+        let input, select;
 
         if (headerKey === FIELD_DISPLAY_NAMES_MAP.uwApproverUnit) {
-            // 單位欄位使用下拉選單
-            const select = document.createElement('select');
+            select = document.createElement('select');
             select.className = 'qt-select';
-            select.style.width = '100%';
-            select.style.margin = '0';
+            select.style.cssText = 'width:100%; margin:0;';
 
-            // 添加選項
             Object.entries(UNIT_CODE_MAPPINGS).forEach(([code, name]) => {
                 const option = document.createElement('option');
                 option.value = `${code}-${name}`;
@@ -1054,692 +1269,270 @@ javascript: (async () => {
             td.innerHTML = '';
             td.appendChild(select);
             select.focus();
-
-            const saveEdit = () => {
-                const newValue = select.value;
-                row[headerKey] = newValue;
-                td.innerHTML = escapeHtml(newValue);
-                displaySystemNotification('已更新儲存格', false);
-            };
-
-            const cancelEdit = () => {
-                td.innerHTML = originalHtml;
-            };
-
             select.onblur = saveEdit;
-            select.onchange = saveEdit;
+            select.onchange = saveEdit; // 選擇後立即保存
             select.onkeydown = e => {
                 if (e.key === 'Enter') saveEdit();
                 if (e.key === 'Escape') cancelEdit();
             };
         } else {
-            // 一般文字欄位使用輸入框
-            const input = document.createElement('input');
+            input = document.createElement('input');
             input.type = 'text';
             input.className = 'qt-input';
-            input.style.width = '100%';
-            input.style.margin = '0';
+            input.style.cssText = 'width:100%; margin:0; box-sizing:border-box;'; // 添加 box-sizing
             input.value = originalValue;
 
             td.innerHTML = '';
             td.appendChild(input);
             input.focus();
             input.select();
-
-            const saveEdit = () => {
-                const newValue = input.value.trim();
-                row[headerKey] = newValue;
-                td.innerHTML = escapeHtml(newValue);
-                displaySystemNotification('已更新儲存格', false);
-            };
-
-            const cancelEdit = () => {
-                td.innerHTML = originalHtml;
-            };
-
             input.onblur = saveEdit;
             input.onkeydown = e => {
                 if (e.key === 'Enter') saveEdit();
                 if (e.key === 'Escape') cancelEdit();
             };
         }
-    }
 
-    // === 主結果表格UI ===
-    function renderResultsTableUI(data) {
-        // 移除現有主視窗
-        document.getElementById(TOOL_MAIN_CONTAINER_ID)?.remove();
-
-        const mainContainer = document.createElement('div');
-        mainContainer.id = TOOL_MAIN_CONTAINER_ID;
-        mainContainer.style.cssText = `
-        position:fixed;
-        top:50%;
-        left:50%;
-        transform:translate(-50%,-50%);
-        width:90vw;
-        max-width:1200px;
-        height:80vh;
-        background:#fff;
-        border-radius:8px;
-        box-shadow:0 10px 30px rgba(0,0,0,0.3);
-        z-index:${Z_INDEX.MAIN_UI};
-        font-family:'Microsoft JhengHei',Arial,sans-serif;
-        display:flex;
-        flex-direction:column;
-        overflow:hidden;
-        `;
-
-        // 標題列
-        const titleBar = document.createElement('div');
-        titleBar.style.cssText = 'background:#f8f9fa;padding:15px 20px;border-bottom:1px solid #dee2e6;cursor:move;user-select:none;font-weight:600;font-size:16px;color:#333;';
-        titleBar.textContent = '凱基人壽案件查詢結果';
-
-        // 拖曳功能
-        let isDragging = false;
-        let dragOffset = {
-            x: 0,
-            y: 0
-        };
-
-        titleBar.onmousedown = e => {
-            isDragging = true;
-            dragOffset.x = e.clientX - mainContainer.offsetLeft;
-            dragOffset.y = e.clientY - mainContainer.offsetTop;
-            document.addEventListener('mousemove', onDrag);
-            document.addEventListener('mouseup', onDragEnd);
-        };
-
-        const onDrag = e => {
-            if (!isDragging) return;
-            const newX = e.clientX - dragOffset.x;
-            const newY = e.clientY - dragOffset.y;
-            mainContainer.style.left = newX + 'px';
-            mainContainer.style.top = newY + 'px';
-            mainContainer.style.transform = 'none';
-        };
-
-        const onDragEnd = () => {
-            isDragging = false;
-            document.removeEventListener('mousemove', onDrag);
-            document.removeEventListener('mouseup', onDragEnd);
-        };
-
-        // 控制列
-        const controlBar = document.createElement('div');
-        controlBar.style.cssText = 'padding:10px 20px;border-bottom:1px solid #dee2e6;display:flex;justify-content:space-between;align-items:center;background:#fff;';
-
-        const leftControls = document.createElement('div');
-        leftControls.style.display = 'flex';
-        leftControls.style.gap = '8px';
-
-        const rightControls = document.createElement('div');
-        rightControls.style.display = 'flex';
-        rightControls.style.gap = '8px';
-        rightControls.style.alignItems = 'center';
-
-        // 左側按鈕
-        const clearBtn = createControlButton('清除條件', '#6c757d');
-        const requeryBtn = createControlButton('重新查詢', '#fd7e14');
-        const a17Btn = createControlButton('A17作業', '#6f42c1');
-        const copyBtn = createControlButton('複製表格', '#28a745');
-        const editBtn = createControlButton(isEditMode ? '結束編輯' : '編輯模式', isEditMode ? '#dc3545' : '#007bff');
-
-        leftControls.appendChild(clearBtn);
-        leftControls.appendChild(requeryBtn);
-        leftControls.appendChild(a17Btn);
-        leftControls.appendChild(copyBtn);
-        leftControls.appendChild(editBtn);
-
-        // 編輯模式下的新增按鈕
-        if (isEditMode) {
-            const addBtn = createControlButton('+ 新增列', '#007bff');
-            addBtn.onclick = () => {
-                StateManager.pushSnapshot('新增列');
-                const newRow = {};
-                StateManager.currentTable.currentHeaders.forEach(header => {
-                    newRow[header] = header === FIELD_DISPLAY_NAMES_MAP.NO ? String(data.length + 1) : '';
-                });
-                data.push(newRow);
-                populateTableRows(data);
-                displaySystemNotification('已新增列', false);
-            };
-            leftControls.appendChild(addBtn);
-        }
-
-        // 右側控制
-        const searchInput = document.createElement('input');
-        searchInput.type = 'text';
-        searchInput.placeholder = '篩選表格內容...';
-        searchInput.style.cssText = 'padding:6px 10px;border:1px solid #ccc;border-radius:4px;font-size:13px;width:200px;';
-
-        const closeBtn = createControlButton('關閉工具', '#dc3545');
-
-        rightControls.appendChild(searchInput);
-        rightControls.appendChild(closeBtn);
-
-        controlBar.appendChild(leftControls);
-        controlBar.appendChild(rightControls);
-
-        // A17模式控制區
-        const a17Controls = document.createElement('div');
-        a17Controls.style.cssText = 'padding:10px 20px;border-bottom:1px solid #dee2e6;background:#f8f9fa;display:none;';
-
-        if (StateManager.a17Mode.isActive) {
-            a17Controls.style.display = 'block';
-            renderA17Controls(a17Controls);
-        }
-
-        // 表格容器
-        const tableContainer = document.createElement('div');
-        tableContainer.style.cssText = 'flex:1;overflow:auto;padding:0;';
-
-        const table = document.createElement('table');
-        table.className = 'qt-table';
-        table.style.cssText = 'width:100%;border-collapse:collapse;margin:0;';
-
-        const thead = document.createElement('thead');
-        const tbody = document.createElement('tbody');
-
-        table.appendChild(thead);
-        table.appendChild(tbody);
-        tableContainer.appendChild(table);
-
-        // 組裝主視窗
-        mainContainer.appendChild(titleBar);
-        mainContainer.appendChild(controlBar);
-        mainContainer.appendChild(a17Controls);
-        mainContainer.appendChild(tableContainer);
-
-        document.body.appendChild(mainContainer);
-
-        // 儲存引用
-        StateManager.currentTable.mainUIElement = mainContainer;
-        StateManager.currentTable.tableBodyElement = tbody;
-        StateManager.currentTable.tableHeadElement = thead;
-        StateManager.currentTable.a17UnitButtonsContainer = a17Controls;
-
-        // 設定表頭
-        setupTableHeaders(data);
-
-        // 填充資料
-        populateTableRows(data);
-
-        // 綁定事件
-        bindControlEvents(clearBtn, requeryBtn, a17Btn, copyBtn, editBtn, closeBtn, searchInput);
-
-        // 搜尋功能
-        searchInput.oninput = () => {
-            const searchTerm = searchInput.value.toLowerCase();
-            const rows = tbody.querySelectorAll('tr');
-            rows.forEach(row => {
-                const text = row.textContent.toLowerCase();
-                row.style.display = text.includes(searchTerm) ? '' : 'none';
-            });
-        };
-    }
-
-    function createControlButton(text, color) {
-        const btn = document.createElement('button');
-        btn.textContent = text;
-        btn.style.cssText = `
-        background:${color};
-        color:white;
-        border:none;
-        padding:6px 12px;
-        border-radius:4px;
-        font-size:13px;
-        cursor:pointer;
-        transition:opacity 0.2s ease;
-        font-weight:500;
-        `;
-        btn.onmouseover = () => btn.style.opacity = '0.85';
-        btn.onmouseout = () => btn.style.opacity = '1';
-        return btn;
-    }
-
-    // === 補足缺失的函數 ===
-    function setupTableHeaders(data) {
-        const thead = StateManager.currentTable.tableHeadElement;
-        thead.innerHTML = '';
-
-        if (!data || data.length === 0) {
-            StateManager.currentTable.currentHeaders = [];
-            return;
-        }
-
-        // 確定表頭欄位
-        const baseHeaders = [
-            FIELD_DISPLAY_NAMES_MAP._queriedValue_,
-            FIELD_DISPLAY_NAMES_MAP.NO,
-            ...ALL_DISPLAY_FIELDS_API_KEYS_MAIN.map(key => FIELD_DISPLAY_NAMES_MAP[key]),
-            FIELD_DISPLAY_NAMES_MAP._apiQueryStatus
-        ];
-
-        // A17模式下加入CSV合併欄位
-        if (StateManager.a17Mode.isActive && StateManager.csvImport.selectedColsForA17Merge.length > 0) {
-            baseHeaders.splice(-1, 0, ...StateManager.csvImport.selectedColsForA17Merge);
-        }
-
-        // 編輯模式下加入操作欄
-        if (isEditMode) {
-            baseHeaders.push('操作');
-        }
-
-        StateManager.currentTable.currentHeaders = baseHeaders;
-
-        const headerRow = document.createElement('tr');
-        baseHeaders.forEach(headerKey => {
-            const th = document.createElement('th');
-            th.textContent = headerKey;
-            th.style.position = 'relative';
-
-            // 排序功能
-            if (headerKey !== '操作') {
-                th.style.cursor = 'pointer';
-                th.onclick = () => {
-                    const currentDirection = StateManager.currentTable.sortDirections[headerKey] || 'asc';
-                    const newDirection = currentDirection === 'asc' ? 'desc' : 'asc';
-                    StateManager.currentTable.sortDirections[headerKey] = newDirection;
-
-                    // 清除其他欄位的排序方向
-                    Object.keys(StateManager.currentTable.sortDirections).forEach(key => {
-                        if (key !== headerKey) delete StateManager.currentTable.sortDirections[key];
-                    });
-
-                    // 排序資料
-                    const currentData = StateManager.a17Mode.isActive ? StateManager.baseA17MasterData : StateManager.originalQueryResults;
-                    currentData.sort((a, b) => {
-                        let aVal = a[headerKey] || '';
-                        let bVal = b[headerKey] || '';
-
-                        // 數字欄位特殊處理
-                        if (headerKey === FIELD_DISPLAY_NAMES_MAP.NO) {
-                            aVal = parseInt(aVal) || 0;
-                            bVal = parseInt(bVal) || 0;
-                        } else {
-                            aVal = String(aVal).toLowerCase();
-                            bVal = String(bVal).toLowerCase();
-                        }
-
-                        if (newDirection === 'asc') {
-                            return aVal > bVal ? 1 : (aVal < bVal ? -1 : 0);
-                        } else {
-                            return aVal < bVal ? 1 : (aVal > bVal ? -1 : 0);
-                        }
-                    });
-
-                    populateTableRows(currentData);
-
-                    // 更新排序箭頭
-                    thead.querySelectorAll('th').forEach(thEl => {
-                        thEl.querySelector('.sort-arrow')?.remove();
-                    });
-
-                    const arrow = document.createElement('span');
-                    arrow.className = 'sort-arrow';
-                    arrow.innerHTML = newDirection === 'asc' ? ' ↑' : ' ↓';
-                    arrow.style.cssText = 'color:#007bff;font-weight:bold;';
-                    th.appendChild(arrow);
-                };
+        // 清理監聽器
+        const cleanupListeners = () => {
+            if (input) {
+                input.onblur = null;
+                input.onkeydown = null;
             }
-
-            headerRow.appendChild(th);
-        });
-
-        thead.appendChild(headerRow);
+            if (select) {
+                select.onblur = null;
+                select.onchange = null;
+                select.onkeydown = null;
+            }
+        };
     }
 
-    // === A17控制區渲染 ===
-    function renderA17Controls(container) {
-        container.innerHTML = '';
+    function handleDeleteRow(rowIndex) {
+        if (confirm('確定要刪除這一列嗎？此操作不可逆。')) {
+            StateManager.pushSnapshot('刪除列');
+            const currentData = StateManager.a17Mode.isActive ? StateManager.baseA17MasterData : StateManager.originalQueryResults;
+            currentData.splice(rowIndex, 1);
+            // 更新序號 (如果顯示序號)
+            currentData.forEach((row, idx) => {
+                row[FIELD_DISPLAY_NAMES_MAP.NO] = String(idx + 1);
+            });
+            populateTableRows(currentData);
+            displaySystemNotification('已刪除列', false);
+        }
+    }
 
-        // 單位篩選按鈕群
-        const unitButtonsContainer = document.createElement('div');
-        unitButtonsContainer.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;';
+    function handleClearConditions() {
+        if (confirm('確定要清除所有查詢條件和結果嗎？')) {
+            StateManager.originalQueryResults = [];
+            StateManager.baseA17MasterData = [];
+            StateManager.csvImport = {
+                fileName: '',
+                rawHeaders: [],
+                rawData: [],
+                selectedColForQueryName: null,
+                selectedColsForA17Merge: [],
+                isA17CsvPrepared: false,
+            };
+            StateManager.a17Mode.isActive = false;
+            StateManager.a17Mode.selectedUnits.clear();
+            isEditMode = false;
 
+            toolMainContainerEl.remove(); // 移除整個工具主視窗
+            displaySystemNotification('已清除所有條件', false);
+        }
+    }
+
+    function handleCopyTable() {
+        const includeText = toolMainContainerEl.querySelector(`#${TOOL_MAIN_CONTAINER_ID}_cbA17IncludeText`)?.checked || false; // 修正為 toolMainContainerEl 內查找
+        copyTableToClipboard(includeText);
+    }
+
+    function toggleEditMode() {
+        StateManager.pushSnapshot('切換編輯模式');
+        isEditMode = !isEditMode;
+        const editBtn = toolMainContainerEl.querySelector(`#${TOOL_MAIN_CONTAINER_ID}_btnEditMode`); // 修正為 toolMainContainerEl 內查找
+        editBtn.textContent = isEditMode ? '結束編輯' : '編輯模式';
+        editBtn.style.backgroundColor = isEditMode ? '#dc3545' : '#007bff';
+
+        const addRowBtn = toolMainContainerEl.querySelector(`#${TOOL_MAIN_CONTAINER_ID}_btnAddRow`); // 修正為 toolMainContainerEl 內查找
+        addRowBtn.style.display = isEditMode ? 'inline-block' : 'none';
+
+        const currentData = StateManager.a17Mode.isActive ? StateManager.baseA17MasterData : StateManager.originalQueryResults;
+        renderResultsTableUI(currentData);
+        displaySystemNotification(`已${isEditMode ? '進入' : '退出'}編輯模式`, false);
+    }
+
+    function handleAddRowToTable() {
+        StateManager.pushSnapshot('新增列');
+        const currentData = StateManager.a17Mode.isActive ? StateManager.baseA17MasterData : StateManager.originalQueryResults;
+        const newRow = {
+            _isNewRow: true
+        }; // 標記為新行以便編輯
+        StateManager.currentTable.currentHeaders.forEach(header => {
+            newRow[header] = header === FIELD_DISPLAY_NAMES_MAP.NO ? String(currentData.length + 1) : '';
+        });
+        currentData.push(newRow);
+        populateTableRows(currentData);
+        displaySystemNotification('已新增列', false);
+    }
+
+
+    function applyTableFilter() {
+        const filterInput = toolMainContainerEl?.querySelector('.qt-filter-input'); // 修正為 toolMainContainerEl 內查找
+        if (!filterInput) return;
+
+        const searchTerm = filterInput.value.toLowerCase();
+        const currentData = StateManager.a17Mode.isActive ? StateManager.baseA17MasterData : StateManager.originalQueryResults;
+
+        let filteredData = currentData;
+        if (StateManager.a17Mode.isActive && StateManager.a17Mode.selectedUnits.size > 0) {
+            filteredData = filteredData.filter(row => { // 在已篩選的數據上再次篩選
+                const unit = row[FIELD_DISPLAY_NAMES_MAP.uwApproverUnit] || '';
+                return Array.from(StateManager.a17Mode.selectedUnits).some(selectedUnit => {
+                    if (selectedUnit === 'UNDEF') {
+                        return !Object.keys(UNIT_CODE_MAPPINGS).some(code => unit.includes(code));
+                    } else {
+                        return unit.includes(selectedUnit);
+                    }
+                });
+            });
+        }
+
+        if (searchTerm) {
+            filteredData = filteredData.filter(row => {
+                return Object.values(row).some(value => {
+                    if (value === null || value === undefined) return false;
+                    // 對於 statusCombined 欄位，搜尋其內部 HTML 文本
+                    if (FIELD_DISPLAY_NAMES_MAP.statusCombined && row[FIELD_DISPLAY_NAMES_MAP.statusCombined] === value) {
+                        const tempDiv = document.createElement('div');
+                        tempDiv.innerHTML = value;
+                        return tempDiv.textContent.toLowerCase().includes(searchTerm);
+                    }
+                    return String(value).toLowerCase().includes(searchTerm);
+                });
+            });
+        }
+        populateTableRows(filteredData);
+    }
+
+    function renderA17ModeUI() {
+        const a17UnitBtnsCtr = toolMainContainerEl.querySelector('.qt-a17-unit-buttons-container'); // 修正為 toolMainContainerEl 內查找
+        const a17TextControls = toolMainContainerEl.querySelector('.qt-a17-text-controls-container'); // 修正為 toolMainContainerEl 內查找
+        a17UnitBtnsCtr.style.display = 'flex';
+        a17TextControls.style.display = 'flex';
+        updateA17UnitButtonCounts(); // 確保按鈕顯示最新計數
+
+        // 綁定A17單位篩選按鈕事件
+        a17UnitBtnsCtr.innerHTML = ''; // 清空舊按鈕
         A17_UNIT_BUTTONS_DEFS.forEach(unitDef => {
             const btn = document.createElement('button');
             btn.className = 'qt-unit-filter-btn';
             btn.dataset.unitId = unitDef.id;
             btn.style.backgroundColor = unitDef.color;
             btn.style.color = 'white';
+            btn.textContent = `${unitDef.label} (0)`; // 初始為0，稍後更新
 
-            // 計算該單位的資料筆數
-            const currentData = StateManager.a17Mode.isActive ? StateManager.baseA17MasterData : StateManager.originalQueryResults;
-            let count = 0;
-            if (unitDef.id === 'UNDEF') {
-                count = currentData.filter(row => {
-                    const unit = row[FIELD_DISPLAY_NAMES_MAP.uwApproverUnit] || '';
-                    return !Object.keys(UNIT_CODE_MAPPINGS).some(code => unit.includes(code));
-                }).length;
-            } else {
-                count = currentData.filter(row => {
-                    const unit = row[FIELD_DISPLAY_NAMES_MAP.uwApproverUnit] || '';
-                    return unit.includes(unitDef.id);
-                }).length;
+            if (StateManager.a17Mode.selectedUnits.has(unitDef.id)) {
+                btn.classList.add('active');
             }
 
-            btn.textContent = `${unitDef.label} (${count})`;
-
-            // 無資料時禁用
-            if (count === 0) {
-                btn.disabled = true;
-                btn.style.opacity = '0.5';
-                btn.style.cursor = 'not-allowed';
-            } else {
-                // 檢查是否已選中
+            btn.onclick = () => {
+                StateManager.pushSnapshot('A17單位篩選');
                 if (StateManager.a17Mode.selectedUnits.has(unitDef.id)) {
+                    StateManager.a17Mode.selectedUnits.delete(unitDef.id);
+                    btn.classList.remove('active');
+                } else {
+                    StateManager.a17Mode.selectedUnits.add(unitDef.id);
                     btn.classList.add('active');
                 }
-
-                btn.onclick = () => {
-                    if (StateManager.a17Mode.selectedUnits.has(unitDef.id)) {
-                        StateManager.a17Mode.selectedUnits.delete(unitDef.id);
-                        btn.classList.remove('active');
-                    } else {
-                        StateManager.a17Mode.selectedUnits.add(unitDef.id);
-                        btn.classList.add('active');
-                    }
-
-                    // 篩選表格資料
-                    filterA17TableByUnits();
-                };
-            }
-
-            unitButtonsContainer.appendChild(btn);
+                applyTableFilter(); // 使用統一的過濾函數
+            };
+            a17UnitBtnsCtr.appendChild(btn);
         });
 
-        // A17通知文控制
-        const textControlsContainer = document.createElement('div');
-        textControlsContainer.style.cssText = 'display:flex;align-items:center;gap:10px;';
+        // 綁定A17通知文包含選項和編輯按鈕
+        const includeTextCheckbox = a17TextControls.querySelector(`#${TOOL_MAIN_CONTAINER_ID}_cbA17IncludeText`);
+        includeTextCheckbox.onchange = () => {
+            // 不做快照，這個變化不影響數據
+            displaySystemNotification(`A17通知文${includeTextCheckbox.checked ? '將' : '不'}包含在複製內容中`, false, 1500);
+        };
 
-        const includeTextCheckbox = document.createElement('input');
-        includeTextCheckbox.type = 'checkbox';
-        includeTextCheckbox.id = 'qt-a17-include-text';
-        includeTextCheckbox.checked = true;
-
-        const includeTextLabel = document.createElement('label');
-        includeTextLabel.htmlFor = 'qt-a17-include-text';
-        includeTextLabel.textContent = 'A17含通知文';
-        includeTextLabel.style.cursor = 'pointer';
-
-        const editTextBtn = createControlButton('編輯通知文', '#007bff');
-        editTextBtn.onclick = () => showA17TextSettingsDialog();
-
-        textControlsContainer.appendChild(includeTextCheckbox);
-        textControlsContainer.appendChild(includeTextLabel);
-        textControlsContainer.appendChild(editTextBtn);
-
-        container.appendChild(unitButtonsContainer);
-        container.appendChild(textControlsContainer);
+        renderTableHeaders([
+            FIELD_DISPLAY_NAMES_MAP._queriedValue_,
+            FIELD_DISPLAY_NAMES_MAP.NO,
+            ...ALL_DISPLAY_FIELDS_API_KEYS_MAIN.map(key => FIELD_DISPLAY_NAMES_MAP[key]),
+            ...StateManager.csvImport.selectedColsForA17Merge, // 合併 CSV 欄位
+            FIELD_DISPLAY_NAMES_MAP._apiQueryStatus
+        ]);
     }
 
-    // === A17單位篩選 ===
-    function filterA17TableByUnits() {
+    function renderNormalModeUI() {
+        const a17UnitBtnsCtr = toolMainContainerEl.querySelector('.qt-a17-unit-buttons-container'); // 修正為 toolMainContainerEl 內查找
+        const a17TextControls = toolMainContainerEl.querySelector('.qt-a17-text-controls-container'); // 修正為 toolMainContainerEl 內查找
+        a17UnitBtnsCtr.style.display = 'none';
+        a17TextControls.style.display = 'none';
+        StateManager.a17Mode.selectedUnits.clear(); // 清空A17模式選中的單位
+
+        renderTableHeaders([
+            FIELD_DISPLAY_NAMES_MAP._queriedValue_,
+            FIELD_DISPLAY_NAMES_MAP.NO,
+            ...ALL_DISPLAY_FIELDS_API_KEYS_MAIN.map(key => FIELD_DISPLAY_NAMES_MAP[key]),
+            FIELD_DISPLAY_NAMES_MAP._apiQueryStatus
+        ]);
+    }
+
+
+    function updateA17UnitButtonCounts() {
+        if (!toolMainContainerEl || !StateManager.currentTable.a17UnitButtonsContainer || !StateManager.a17Mode.isActive) return; // 修正為 toolMainContainerEl 檢查
+
         const currentData = StateManager.a17Mode.isActive ? StateManager.baseA17MasterData : StateManager.originalQueryResults;
 
-        if (StateManager.a17Mode.selectedUnits.size === 0) {
-            populateTableRows(currentData);
-            return;
-        }
-
-        const filteredData = currentData.filter(row => {
-            const unit = row[FIELD_DISPLAY_NAMES_MAP.uwApproverUnit] || '';
-
-            return Array.from(StateManager.a17Mode.selectedUnits).some(selectedUnit => {
-                if (selectedUnit === 'UNDEF') {
+        StateManager.currentTable.a17UnitButtonsContainer.querySelectorAll('.qt-unit-filter-btn').forEach(btn => {
+            const unitDefId = btn.dataset.unitId;
+            let count = 0;
+            if (unitDefId === 'UNDEF') {
+                count = currentData.filter(row => {
+                    const unit = row[FIELD_DISPLAY_NAMES_MAP.uwApproverUnit] || '';
                     return !Object.keys(UNIT_CODE_MAPPINGS).some(code => unit.includes(code));
-                } else {
-                    return unit.includes(selectedUnit);
-                }
-            });
-        });
-
-        populateTableRows(filteredData);
-    }
-
-    // === A17通知文設定對話框 ===
-    function showA17TextSettingsDialog() {
-        return new Promise(resolve => {
-            const settings = StateManager.a17Mode.textSettings;
-
-            const contentHtml = `
-        <h3 class="qt-dialog-title">A17 通知文設定</h3>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:15px;">
-            <div>
-                <label style="display:block;margin-bottom:5px;font-weight:500;">主文案內容：</label>
-                <textarea id="qt-a17-main-content" class="qt-textarea" style="height:120px;">${escapeHtml(settings.mainContent)}</textarea>
-                
-                <label style="display:block;margin-bottom:5px;font-weight:500;">字體大小 (pt)：</label>
-                <input type="number" id="qt-a17-main-font-size" class="qt-input" min="8" max="24" value="${settings.mainFontSize}">
-                
-                <label style="display:block;margin-bottom:5px;font-weight:500;">行高：</label>
-                <input type="number" id="qt-a17-main-line-height" class="qt-input" min="1" max="3" step="0.1" value="${settings.mainLineHeight}">
-                
-                <label style="display:block;margin-bottom:5px;font-weight:500;">字體顏色：</label>
-                <input type="color" id="qt-a17-main-color" class="qt-input" value="${settings.mainFontColor}">
-            </div>
-            <div>
-                <label style="display:block;margin-bottom:5px;font-weight:500;">產檔時間偏移 (天)：</label>
-                <input type="number" id="qt-a17-gen-offset" class="qt-input" value="${settings.genDateOffset}">
-                
-                <label style="display:block;margin-bottom:5px;font-weight:500;">對比時間偏移 (天)：</label>
-                <input type="number" id="qt-a17-comp-offset" class="qt-input" value="${settings.compDateOffset}">
-                
-                <label style="display:block;margin-bottom:5px;font-weight:500;">日期字體大小 (pt)：</label>
-                <input type="number" id="qt-a17-date-font-size" class="qt-input" min="6" max="16" value="${settings.dateFontSize}">
-                
-                <label style="display:block;margin-bottom:5px;font-weight:500;">日期行高：</label>
-                <input type="number" id="qt-a17-date-line-height" class="qt-input" min="1" max="3" step="0.1" value="${settings.dateLineHeight}">
-                
-                <label style="display:block;margin-bottom:5px;font-weight:500;">日期顏色：</label>
-                <input type="color" id="qt-a17-date-color" class="qt-input" value="${settings.dateFontColor}">
-            </div>
-        </div>
-        
-        <div style="margin-top:15px;">
-            <label style="display:block;margin-bottom:5px;font-weight:500;">預覽區（可臨時編輯）：</label>
-            <div id="qt-a17-preview" contenteditable="true" style="border:1px solid #ddd;padding:10px;border-radius:4px;min-height:100px;background:#f9f9f9;font-family:'Microsoft JhengHei',Arial,sans-serif;"></div>
-        </div>
-        
-        <div class="qt-dialog-flex-between">
-            <button id="qt-a17-reset" class="qt-dialog-btn qt-dialog-btn-orange">重設預設</button>
-            <div>
-                <button id="qt-a17-cancel" class="qt-dialog-btn qt-dialog-btn-grey">取消</button>
-                <button id="qt-a17-save" class="qt-dialog-btn qt-dialog-btn-blue">儲存設定</button>
-            </div>
-        </div>
-        `;
-
-            const {
-                overlay
-            } = createDialogBase('_A17TextSettings', contentHtml, '700px', 'auto');
-
-            const previewEl = overlay.querySelector('#qt-a17-preview');
-
-            function updatePreview() {
-                const mainContent = overlay.querySelector('#qt-a17-main-content').value;
-                const mainFontSize = overlay.querySelector('#qt-a17-main-font-size').value;
-                const mainLineHeight = overlay.querySelector('#qt-a17-main-line-height').value;
-                const mainColor = overlay.querySelector('#qt-a17-main-color').value;
-                const genOffset = parseInt(overlay.querySelector('#qt-a17-gen-offset').value) || 0;
-                const compOffset = parseInt(overlay.querySelector('#qt-a17-comp-offset').value) || 0;
-                const dateFontSize = overlay.querySelector('#qt-a17-date-font-size').value;
-                const dateLineHeight = overlay.querySelector('#qt-a17-date-line-height').value;
-                const dateColor = overlay.querySelector('#qt-a17-date-color').value;
-
-                const genDate = new Date();
-                genDate.setDate(genDate.getDate() + genOffset);
-                const compDate = new Date();
-                compDate.setDate(compDate.getDate() + compOffset);
-
-                previewEl.innerHTML = `
-            <div style="font-size:${mainFontSize}px;line-height:${mainLineHeight};color:${mainColor};">
-                ${escapeHtml(mainContent).replace(/\n/g,'<br>')}
-            </div>
-            <div style="margin-top:15px;font-size:${dateFontSize}px;line-height:${dateLineHeight};color:${dateColor};">
-                產檔時間：${formatDate(genDate)}<br>
-                對比時間：${formatDate(compDate)}
-            </div>
-            `;
+                }).length;
+            } else {
+                count = currentData.filter(row => {
+                    const unit = row[FIELD_DISPLAY_NAMES_MAP.uwApproverUnit] || '';
+                    return unit.includes(unitDefId);
+                }).length;
             }
-
-            // 初始預覽
-            updatePreview();
-
-            // 綁定輸入事件
-            ['#qt-a17-main-content', '#qt-a17-main-font-size', '#qt-a17-main-line-height', '#qt-a17-main-color',
-                '#qt-a17-gen-offset', '#qt-a17-comp-offset', '#qt-a17-date-font-size', '#qt-a17-date-line-height', '#qt-a17-date-color'
-            ]
-            .forEach(selector => {
-                overlay.querySelector(selector).oninput = updatePreview;
-            });
-
-            overlay.querySelector('#qt-a17-reset').onclick = () => {
-                overlay.querySelector('#qt-a17-main-content').value = A17_DEFAULT_TEXT_CONTENT;
-                overlay.querySelector('#qt-a17-main-font-size').value = '12';
-                overlay.querySelector('#qt-a17-main-line-height').value = '1.5';
-                overlay.querySelector('#qt-a17-main-color').value = '#333333';
-                overlay.querySelector('#qt-a17-gen-offset').value = '-3';
-                overlay.querySelector('#qt-a17-comp-offset').value = '0';
-                overlay.querySelector('#qt-a17-date-font-size').value = '8';
-                overlay.querySelector('#qt-a17-date-line-height').value = '1.2';
-                overlay.querySelector('#qt-a17-date-color').value = '#555555';
-                updatePreview();
-            };
-
-            overlay.querySelector('#qt-a17-save').onclick = () => {
-                StateManager.a17Mode.textSettings = {
-                    mainContent: overlay.querySelector('#qt-a17-main-content').value,
-                    mainFontSize: parseInt(overlay.querySelector('#qt-a17-main-font-size').value),
-                    mainLineHeight: parseFloat(overlay.querySelector('#qt-a17-main-line-height').value),
-                    mainFontColor: overlay.querySelector('#qt-a17-main-color').value,
-                    dateFontSize: parseInt(overlay.querySelector('#qt-a17-date-font-size').value),
-                    dateLineHeight: parseFloat(overlay.querySelector('#qt-a17-date-line-height').value),
-                    dateFontColor: overlay.querySelector('#qt-a17-date-color').value,
-                    genDateOffset: parseInt(overlay.querySelector('#qt-a17-gen-offset').value),
-                    compDateOffset: parseInt(overlay.querySelector('#qt-a17-comp-offset').value),
-                };
-                StateManager.saveA17Settings();
-                overlay.remove();
-                displaySystemNotification('A17通知文設定已儲存', false);
-                resolve(true);
-            };
-
-            overlay.querySelector('#qt-a17-cancel').onclick = () => {
-                overlay.remove();
-                resolve(false);
-            };
+            btn.textContent = `${A17_UNIT_BUTTONS_DEFS.find(d => d.id === unitDefId)?.label || unitDefId} (${count})`;
+            btn.disabled = (count === 0);
+            btn.style.opacity = (count === 0) ? '0.5' : '1';
+            btn.style.cursor = (count === 0) ? 'not-allowed' : 'pointer';
         });
     }
 
-    // === 控制事件綁定 ===
-    function bindControlEvents(clearBtn, requeryBtn, a17Btn, copyBtn, editBtn, closeBtn, searchInput) {
-        clearBtn.onclick = () => {
-            if (confirm('確定要清除所有查詢條件和結果嗎？')) {
-                StateManager.originalQueryResults = [];
-                StateManager.baseA17MasterData = [];
-                StateManager.csvImport = {
-                    fileName: '',
-                    rawHeaders: [],
-                    rawData: [],
-                    selectedColForQueryName: null,
-                    selectedColsForA17Merge: [],
-                    isA17CsvPrepared: false,
-                };
-                StateManager.a17Mode.isActive = false;
-                StateManager.a17Mode.selectedUnits.clear();
-                isEditMode = false;
 
-                StateManager.currentTable.mainUIElement?.remove();
-                displaySystemNotification('已清除所有條件', false);
-            }
-        };
-
-        requeryBtn.onclick = async () => {
-            const querySetupResult = await createQuerySetupDialog();
-            if (querySetupResult) {
-                await executeQuery(querySetupResult);
-            }
-        };
-
-        a17Btn.onmousedown = () => {
-            a17ButtonLongPressTimer = setTimeout(() => {
-                // 長按強制進入A17模式
-                StateManager.pushSnapshot('強制進入A17模式');
-                StateManager.a17Mode.isActive = true;
-                StateManager.a17Mode.selectedUnits.clear();
-
-                // 重新渲染UI
-                renderResultsTableUI(StateManager.originalQueryResults);
-                displaySystemNotification('已強制進入A17模式', false);
-            }, 1000);
-        };
-
-        a17Btn.onmouseup = () => {
-            if (a17ButtonLongPressTimer) {
-                clearTimeout(a17ButtonLongPressTimer);
-                a17ButtonLongPressTimer = null;
-            }
-        };
-
-        a17Btn.onclick = () => {
-            if (a17ButtonLongPressTimer) {
-                clearTimeout(a17ButtonLongPressTimer);
-                a17ButtonLongPressTimer = null;
-            }
-
-            if (!StateManager.csvImport.isA17CsvPrepared) {
+    function toggleA17Mode(isLongPress = false) {
+        if (isLongPress) {
+            StateManager.pushSnapshot('強制進入A17模式');
+            StateManager.a17Mode.isActive = true;
+            StateManager.a17Mode.selectedUnits.clear();
+            mergeA17Data(); // 長按直接合併數據
+            renderResultsTableUI(StateManager.baseA17MasterData);
+            displaySystemNotification('已強制進入A17模式', false);
+        } else {
+            if (!StateManager.csvImport.isA17CsvPrepared && !StateManager.a17Mode.isActive) { // 如果沒有CSV且不是退出模式
                 displaySystemNotification('請先匯入CSV並選擇A17合併欄位', true);
                 return;
             }
-
             StateManager.pushSnapshot('切換A17模式');
             StateManager.a17Mode.isActive = !StateManager.a17Mode.isActive;
-
             if (StateManager.a17Mode.isActive) {
-                // 合併CSV資料到查詢結果
                 mergeA17Data();
             }
-
             renderResultsTableUI(StateManager.a17Mode.isActive ? StateManager.baseA17MasterData : StateManager.originalQueryResults);
-            displaySystemNotification(`已${StateManager.a17Mode.isActive?'進入':'退出'}A17模式`, false);
-        };
-
-        copyBtn.onclick = () => {
-            const includeText = document.querySelector('#qt-a17-include-text')?.checked || false;
-            copyTableToClipboard(includeText);
-        };
-
-        editBtn.onclick = () => {
-            StateManager.pushSnapshot('切換編輯模式');
-            isEditMode = !isEditMode;
-            editBtn.textContent = isEditMode ? '結束編輯' : '編輯模式';
-            editBtn.style.backgroundColor = isEditMode ? '#dc3545' : '#007bff';
-
-            const currentData = StateManager.a17Mode.isActive ? StateManager.baseA17MasterData : StateManager.originalQueryResults;
-            renderResultsTableUI(currentData);
-            displaySystemNotification(`已${isEditMode?'進入':'退出'}編輯模式`, false);
-        };
-
-        closeBtn.onclick = () => {
-            if (confirm('確定要關閉查詢工具嗎？')) {
-                StateManager.currentTable.mainUIElement?.remove();
-                displaySystemNotification('查詢工具已關閉', false);
-            }
-        };
-
-        // Ctrl+Z復原功能
-        document.addEventListener('keydown', e => {
-            if (e.ctrlKey && e.key === 'z' && StateManager.currentTable.mainUIElement) {
-                e.preventDefault();
-                StateManager.undo();
-            }
-        });
+            displaySystemNotification(`已${StateManager.a17Mode.isActive ? '進入' : '退出'}A17模式`, false);
+        }
     }
 
-    // === A17資料合併 ===
+
     function mergeA17Data() {
         if (!StateManager.csvImport.isA17CsvPrepared || StateManager.csvImport.selectedColsForA17Merge.length === 0) {
             StateManager.baseA17MasterData = [...StateManager.originalQueryResults];
@@ -1750,17 +1543,20 @@ javascript: (async () => {
             const mergedRow = {
                 ...queryRow
             };
+            const queryValue = queryRow[FIELD_DISPLAY_NAMES_MAP._queriedValue_];
 
             // 尋找對應的CSV資料
-            const queryValue = queryRow[FIELD_DISPLAY_NAMES_MAP._queriedValue_];
-            const matchingCsvRow = StateManager.csvImport.rawData.find(csvRow => {
-                return Object.values(csvRow).some(value => String(value).trim() === String(queryValue).trim());
+            const matchingCsvRow = StateManager.csvImport.rawData.find(csvRowArr => {
+                // csvRowArr 是 ['value1', 'value2', ...] 這樣的陣列
+                // 匹配邏輯：CSV 的任一列的值與查詢值匹配
+                return csvRowArr.some(cellValue => String(cellValue).trim() === String(queryValue).trim());
             });
 
+            // 如果找到匹配的 CSV 行，則將選定的欄位合併到查詢結果中
             if (matchingCsvRow) {
-                // 合併選中的CSV欄位
                 StateManager.csvImport.selectedColsForA17Merge.forEach(colName => {
-                    mergedRow[colName] = matchingCsvRow[colName] || '';
+                    const colIndex = StateManager.csvImport.rawHeaders.indexOf(colName);
+                    mergedRow[colName] = colIndex !== -1 ? (matchingCsvRow[colIndex] || '') : '';
                 });
             } else {
                 // 沒有匹配的CSV資料，填入空值
@@ -1773,18 +1569,16 @@ javascript: (async () => {
         });
     }
 
-    // === 複製表格功能 ===
+
     function copyTableToClipboard(includeA17Text = false) {
         const currentData = StateManager.a17Mode.isActive ? StateManager.baseA17MasterData : StateManager.originalQueryResults;
         const headers = StateManager.currentTable.currentHeaders;
-
         if (!currentData || currentData.length === 0) {
             displaySystemNotification('沒有資料可複製', true);
             return;
         }
 
         let content = '';
-
         // A17模式且包含通知文
         if (StateManager.a17Mode.isActive && includeA17Text) {
             const settings = StateManager.a17Mode.textSettings;
@@ -1808,17 +1602,28 @@ javascript: (async () => {
             content += `<th style="background:#f8f9fa;padding:8px;text-align:left;">${escapeHtml(header)}</th>`;
         });
         content += `</tr></thead><tbody>`;
-
         currentData.forEach(row => {
             content += `<tr>`;
             headers.forEach(header => {
                 let cellValue = row[header];
+                // 處理特殊顯示欄位，確保複製時HTML標籤正確
+                if (header === FIELD_DISPLAY_NAMES_MAP.statusCombined) {
+                    // 如果是狀態組合，直接使用已經包含HTML的row[header]值
+                } else if (header === FIELD_DISPLAY_NAMES_MAP.uwApproverUnit) {
+                    const unitCodePrefix = getFirstLetter(cellValue);
+                    const mappedUnitName = UNIT_CODE_MAPPINGS[unitCodePrefix] || cellValue;
+                    cellValue = unitCodePrefix !== 'UNDEF' && UNIT_CODE_MAPPINGS[unitCodePrefix] ? `${unitCodePrefix}-${mappedUnitName.replace(/^[A-Z]-/,'')}` : mappedUnitName;
+                } else if (header === FIELD_DISPLAY_NAMES_MAP.uwApprover || header === FIELD_DISPLAY_NAMES_MAP.approvalUser) {
+                    cellValue = extractName(cellValue);
+                }
+
                 if (cellValue === null || cellValue === undefined) cellValue = '';
-                content += `<td style="padding:8px;border:1px solid #ddd;">${String(cellValue)}</td>`;
+                // 只有在特定欄位才允許HTML，否則進行HTML轉義
+                const displayValue = (header === FIELD_DISPLAY_NAMES_MAP.statusCombined) ? String(cellValue) : escapeHtml(String(cellValue));
+                content += `<td style="padding:8px;border:1px solid #ddd;">${displayValue}</td>`;
             });
             content += `</tr>`;
         });
-
         content += `</tbody></table>`;
 
         // 複製到剪貼簿
@@ -1828,22 +1633,34 @@ javascript: (async () => {
         const item = new ClipboardItem({
             'text/html': blob
         });
-
         navigator.clipboard.write([item]).then(() => {
             displaySystemNotification('表格已複製到剪貼簿', false);
-        }).catch(() => {
-            // 降級處理
+        }).catch((err) => {
+            console.error("複製到剪貼簿 (HTML) 失敗:", err);
+            // 降級處理：複製純文字格式
             const textContent = headers.join('\t') + '\n' +
-                currentData.map(row => headers.map(h => row[h] || '').join('\t')).join('\n');
+                currentData.map(row => headers.map(h => {
+                    let cellVal = row[h];
+                    if (cellVal === null || cellVal === undefined) return '';
+                    // 對於包含HTML的狀態欄位，只複製其文本內容
+                    if (h === FIELD_DISPLAY_NAMES_MAP.statusCombined) {
+                        const tempDiv = document.createElement('div');
+                        tempDiv.innerHTML = String(cellVal);
+                        return tempDiv.textContent;
+                    }
+                    return String(cellVal);
+                }).join('\t')).join('\n');
             navigator.clipboard.writeText(textContent).then(() => {
                 displaySystemNotification('表格已複製到剪貼簿（純文字格式）', false);
-            }).catch(() => {
+            }).catch((err2) => {
+                console.error("複製到剪貼簿 (純文字) 失敗:", err2);
                 displaySystemNotification('複製失敗，請手動選擇表格內容', true);
             });
         });
     }
 
-    // === 主執行函數 ===
+
+    // === 主要執行函數 ===
     async function executeQuery(querySetupResult) {
         const queryValues = querySetupResult.queryValues.split(/[\s,;\n]+/).map(x => x.trim().toUpperCase()).filter(Boolean);
 
@@ -1853,7 +1670,6 @@ javascript: (async () => {
         }
 
         selectedQueryDefinitionGlobal = QUERYABLE_FIELD_DEFINITIONS.find(qdf => qdf.queryApiKey === querySetupResult.selectedApiKey);
-
         // 顯示載入對話框
         const loadingDialog = createDialogBase('_Loading', `
         <h3 class="qt-dialog-title" id="${TOOL_MAIN_CONTAINER_ID}_LoadingTitle">查詢中...</h3>
@@ -1861,7 +1677,6 @@ javascript: (async () => {
         <div style="width:40px;height:40px;border:4px solid #f3f3f3;border-top:4px solid #3498db;border-radius:50%;margin:15px auto;animation:qtSpin 1s linear infinite;"></div>
         <style>@keyframes qtSpin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}</style>
     `, '300px', 'auto', 'text-align:center;');
-
         const loadingTitleEl = loadingDialog.dialog.querySelector(`#${TOOL_MAIN_CONTAINER_ID}_LoadingTitle`);
         const loadingMsgEl = loadingDialog.dialog.querySelector(`#${TOOL_MAIN_CONTAINER_ID}_LoadingMsg`);
 
@@ -1880,7 +1695,6 @@ javascript: (async () => {
                 _originalQueryValue: singleQueryValue,
                 _retryFailed: false
             };
-
             const apiResult = await performApiQuery(singleQueryValue, selectedQueryDefinitionGlobal.queryApiKey);
             let apiQueryStatusText = '❌ 查詢失敗';
 
@@ -1893,15 +1707,18 @@ javascript: (async () => {
             }
 
             resultRowBase[FIELD_DISPLAY_NAMES_MAP._apiQueryStatus] = apiQueryStatusText;
-
             if (apiResult.success && apiResult.data.records) {
                 apiResult.data.records.forEach(rec => {
                     const populatedRow = {
-                        ...resultRowBase
-                    };
+                        ...resultRowBase,
+                        ...rec
+                    }; // 先合併 API 回傳的原始資料
+
+                    // 針對顯示名稱進行格式化處理
                     ALL_DISPLAY_FIELDS_API_KEYS_MAIN.forEach(dKey => {
-                        const displayName = FIELD_DISPLAY_NAMES_MAP[dKey] || dKey;
-                        let cellValue = rec[dKey] === null || rec[dKey] === undefined ? '' : String(rec[dKey]);
+                        const displayName = FIELD_DISPLAY_NAMES_MAP[dKey];
+                        let cellValue = rec[dKey];
+                        if (cellValue === null || cellValue === undefined) cellValue = '';
 
                         if (dKey === 'statusCombined') {
                             const mainS = rec.mainStatus || '';
@@ -1910,11 +1727,11 @@ javascript: (async () => {
                         } else if (dKey === UNIT_MAP_FIELD_API_KEY) {
                             const unitCodePrefix = getFirstLetter(cellValue);
                             const mappedUnitName = UNIT_CODE_MAPPINGS[unitCodePrefix] || cellValue;
-                            populatedRow[displayName] = unitCodePrefix && UNIT_CODE_MAPPINGS[unitCodePrefix] ? `${unitCodePrefix}-${mappedUnitName.replace(/^[A-Z]-/,'')}` : mappedUnitName;
+                            populatedRow[displayName] = unitCodePrefix !== 'UNDEF' && UNIT_CODE_MAPPINGS[unitCodePrefix] ? `${unitCodePrefix}-${mappedUnitName.replace(/^[A-Z]-/,'')}` : mappedUnitName;
                         } else if (dKey === 'uwApprover' || dKey === 'approvalUser') {
                             populatedRow[displayName] = extractName(cellValue);
                         } else {
-                            populatedRow[displayName] = cellValue;
+                            populatedRow[displayName] = String(cellValue); // 確保所有值都是字串形式
                         }
                     });
                     StateManager.originalQueryResults.push(populatedRow);
@@ -1928,41 +1745,82 @@ javascript: (async () => {
         }
 
         loadingDialog.overlay.remove();
-
         if (StateManager.originalQueryResults.length > 0) {
             StateManager.originalQueryResults.sort((a, b) => (parseInt(a[FIELD_DISPLAY_NAMES_MAP.NO]) || 0) - (parseInt(b[FIELD_DISPLAY_NAMES_MAP.NO]) || 0));
         }
 
         StateManager.a17Mode.isActive = false;
         isEditMode = false;
+        StateManager.pushSnapshot('初次查詢完成'); // 首次查詢結果也做快照
 
         renderResultsTableUI(StateManager.originalQueryResults);
         displaySystemNotification(`查詢完成！共處理 ${queryValues.length} 個查詢值`, false, 3500);
     }
 
-    // === 主執行函數 ===
+    // === 工具啟動主函數 (已強化) ===
     async function executeCaseQueryTool() {
-        // 檢查是否已有工具開啟
-        if (document.getElementById(TOOL_MAIN_CONTAINER_ID)) {
+        // 1. 檢查並創建主工具視窗 (如果不存在)
+        if (!toolMainContainerEl) {
+            toolMainContainerEl = document.getElementById(TOOL_MAIN_CONTAINER_ID);
+            if (toolMainContainerEl) {
+                toolMainContainerEl.remove(); // 移除舊的，確保乾淨啟動
+            }
+            toolMainContainerEl = document.createElement('div');
+            toolMainContainerEl.id = TOOL_MAIN_CONTAINER_ID;
+            toolMainContainerEl.style.cssText = `
+            position:fixed;
+            top:50%;
+            left:50%;
+            transform:translate(-50%,-50%);
+            width:90vw;
+            max-width:1200px;
+            height:80vh;
+            background:#fff;
+            border-radius:8px;
+            box-shadow:0 10px 30px rgba(0,0,0,0.3);
+            z-index:${Z_INDEX.MAIN_UI};
+            font-family:'Microsoft JhengHei',Arial,sans-serif;
+            display:flex;
+            flex-direction:column;
+            overflow:hidden;
+            border:1px solid #dee2e6; /* 主視窗邊框 */
+            box-sizing: border-box; /* 確保padding不會撐大尺寸 */
+        `;
+            document.body.appendChild(toolMainContainerEl); // 將主容器附加到 body
+        }
+
+        // 2. 檢查是否已有工具開啟（通過判斷其內容是否已填充）
+        // 如果工具視窗已存在且有內容（例如上次查詢結果），則不重複啟動
+        if (toolMainContainerEl.children.length > 0 && toolMainContainerEl.querySelector('.qt-main-title-bar')) {
             displaySystemNotification('工具已開啟', true);
             return;
         }
 
-        const selectedEnv = await EnvManager.showDialog();
-        if (!selectedEnv) {
-            displaySystemNotification('操作已取消', true);
-            return;
-        }
+        // 3. 自動判斷並設定環境（優先）
+        EnvManager.autoDetectAndSet();
+        // EnvManager.updateDisplay() 會在 EnvManager.set() 中被呼叫，確保在主視窗內顯示
 
-        EnvManager.set(selectedEnv);
-        displaySystemNotification(`環境: ${selectedEnv === 'prod' ? '正式' : '測試'}`, false);
+        // 4. 清除可能殘留的舊對話框 overlay
+        ['_EnvSelect_overlay', '_Token_overlay', '_QuerySetup_overlay',
+            '_A17TextSettings_overlay', '_Loading_overlay', '_CSVPurpose_overlay',
+            '_CSVColSelect_overlay', '_CSVCheckbox_overlay', '_RetryEdit_overlay'
+        ]
+        .forEach(suffix => {
+            // 在 toolMainContainerEl 內查找並移除
+            const el = toolMainContainerEl.querySelector(`#${TOOL_MAIN_CONTAINER_ID}${suffix}`);
+            if (el) el.remove();
+        });
+        // 移除系統通知（如果存在於 body 層級）
+        document.getElementById(TOOL_MAIN_CONTAINER_ID + '_Notification')?.remove();
 
+        // 5. 處理 Token 邏輯
         if (!TokenManager.init()) {
             let tokenAttempt = 1;
             while (true) {
                 const tokenResult = await TokenManager.showDialog(tokenAttempt);
                 if (tokenResult === '_close_tool_') {
                     displaySystemNotification('工具已關閉', false);
+                    if (toolMainContainerEl) toolMainContainerEl.remove(); // 關閉整個工具主視窗
                     return;
                 }
                 if (tokenResult === '_skip_token_') {
@@ -1972,6 +1830,7 @@ javascript: (async () => {
                 }
                 if (tokenResult === '_token_dialog_cancel_') {
                     displaySystemNotification('Token輸入已取消', true);
+                    if (toolMainContainerEl) toolMainContainerEl.remove(); // 關閉整個工具主視窗
                     return;
                 }
                 if (tokenResult && tokenResult.trim() !== '') {
@@ -1984,33 +1843,20 @@ javascript: (async () => {
             }
         }
 
+        // 6. 顯示查詢設定對話框
         const querySetupResult = await createQuerySetupDialog();
         if (!querySetupResult) {
             displaySystemNotification('操作已取消', true);
+            if (toolMainContainerEl) toolMainContainerEl.remove(); // 關閉整個工具主視窗
             return;
         }
 
         await executeQuery(querySetupResult);
     }
 
-    // === 主函數執行 ===
+    // === 主函數執行入口 ===
     (async function main() {
-        document.getElementById(TOOL_MAIN_CONTAINER_ID)?.remove();
-
-        ['_EnvSelect_overlay', '_Token_overlay', '_QuerySetup_overlay',
-            '_A17TextSettings_overlay', '_Loading_overlay', '_CSVPurpose_overlay',
-            '_CSVColSelect_overlay', '_CSVCheckbox_overlay', '_RetryEdit_overlay'
-        ]
-        .forEach(suffix => {
-            const el = document.getElementById(TOOL_MAIN_CONTAINER_ID + suffix);
-            if (el) el.remove();
-        });
-
-        document.getElementById(TOOL_MAIN_CONTAINER_ID + '_Notification')?.remove();
-
-        StateManager.loadA17Settings();
-
+        // 主函數現在只負責調用 executeCaseQueryTool，所有的 UI 管理都在 executeCaseQueryTool 內部
         await executeCaseQueryTool();
     })();
-
 })();
